@@ -1,0 +1,52 @@
+# /etc/fail2ban/jail.d/slow-bruteforce.local
+
+# ============================================
+# Медленный brute-force: большое окно наблюдения
+# ============================================
+[sshd-slow]
+enabled = true
+filter = sshd[mode=aggressive]
+backend = systemd
+journalmatch = _SYSTEMD_UNIT=ssh.service + _COMM=sshd
+
+# 5 попыток за 24 часа = бан на 3 дня
+maxretry = 5
+findtime = 86400
+bantime = 259200
+banaction = iptables-allports
+action = iptables-allports[name=SSH-slow]
+         telegram
+
+# ============================================
+# Сверх-медленный brute-force: недельное окно
+# ============================================
+[sshd-very-slow]
+enabled = true
+filter = sshd[mode=aggressive]
+backend = systemd
+journalmatch = _SYSTEMD_UNIT=ssh.service + _COMM=sshd
+
+# 10 попыток за 7 дней = бан на 30 дней
+maxretry = 10
+findtime = 604800
+bantime = 2592000
+banaction = iptables-allports
+action = iptables-allports[name=SSH-very-slow]
+         telegram
+
+# ============================================
+# Ультра-медленный: месячное окно
+# ============================================
+[sshd-ultra-slow]
+enabled = true
+filter = sshd[mode=aggressive]
+backend = systemd
+journalmatch = _SYSTEMD_UNIT=ssh.service + _COMM=sshd
+
+# 15 попыток за 30 дней = перманентный бан
+maxretry = 15
+findtime = 2592000
+bantime = -1
+banaction = iptables-allports
+action = iptables-allports[name=SSH-ultra-slow]
+         telegram

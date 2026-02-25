@@ -1,0 +1,7 @@
+speedtest.hostkey.ru:5202:Россия (Hostkey):16
+speedtest.wtnet.de:5202:Германия (WTNet):26
+ping-ams1.online.net:5200:Нидерланды (Online.net):27
+iperf.online.net:5204:Франция (Online.net):36
+lon.speedtest.clouvider.net:5200:Великобритания (Clouvider):38
+speedtest.uztelecom.uz:5200:Узбекистан (Uztelecom):101
+speedtest.tyo11.jp.leaseweb.net:5201:Япония (Leaseweb):269
