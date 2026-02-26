@@ -1,0 +1,53 @@
+{
+  "monitoring": {
+    "check_interval": 180,
+    "thresholds": {
+      "cpu": 80,
+      "ram": 90,
+      "disk": 95,
+      "swap": 80
+    },
+    "ssh_monitor": {
+      "enabled": true,
+      "alert_window": 60,
+      "max_alerts_per_ip": 3
+    },
+    "port_monitor": {
+      "enabled": true,
+      "check_interval": 30
+    }
+  },
+  "fail2ban": {
+    "subnet_threshold": 5,
+    "subnet_bantime": 86400,
+    "alert_anomaly_threshold": 50,
+    "daily_report_time": "08:00"
+  },
+  "network_stats": {
+    "collection_interval": 3600,
+    "retention": {
+      "daily": 7,
+      "weekly": 4,
+      "monthly": 12,
+      "yearly": 5
+    }
+  },
+  "geoip": {
+    "country_code": "ru",
+    "update_schedule": "weekly",
+    "source": "ipverse",
+    "whitelist_ips": [
+      "127.0.0.0/8",
+      "91.103.211.70",
+      "89.188.96.18"
+    ],
+    "whitelist_domains": [
+      "71af089be9fc.sn.mynetname.net"
+    ]
+  },
+  "speedtest": {
+    "server_update_interval": 86400,
+    "test_duration": 3,
+    "max_attempts": 5
+  }
+}

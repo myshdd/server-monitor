@@ -1,0 +1,43 @@
+# Секретные данные
+config/secrets.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Виртуальные окружения
+bots/admin_bot_venv/
+bots/monitor_venv/
+venv/
+env/
+
+# Данные и логи
+data/*.json
+data/*.lock
+data/geoip/*.zone
+*.log
+
+# Временные файлы
+*.tmp
+*.bak
+*.backup
+*.swp
+*~
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Локальные настройки (можно создать для разработки)
+config/local/

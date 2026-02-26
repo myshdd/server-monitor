@@ -1,0 +1,43 @@
+{
+  "config": {
+    "base_dir": "/root/.config/server-monitor",
+    "settings": "/root/.config/server-monitor/settings.json",
+    "secrets": "/root/.config/server-monitor/secrets.json",
+    "paths": "/root/.config/server-monitor/paths.json"
+  },
+  "data": {
+    "network_stats_dir": "/opt/server-monitor/data",
+    "network_stats_file": "/opt/server-monitor/data/stats.json",
+    "prev_counters": "/opt/server-monitor/data/prev_counters.json",
+    "geoip_dir": "/opt/server-monitor/data/geoip",
+    "geoip_ru_zone": "/opt/server-monitor/data/geoip/ru.zone",
+    "iperf_servers": "/etc/iperf3-servers.txt",
+    "iperf_working": "/etc/iperf3-working.txt",
+    "docker_ports": "/etc/docker-monitor-ports.conf"
+  },
+  "logs": {
+    "base_dir": "/var/log/server-monitor",
+    "fail2ban": "/var/log/fail2ban.log",
+    "f2b_subnet": "/var/log/f2b-subnet-aggregator.log",
+    "f2b_anomaly": "/var/log/f2b-anomaly.log",
+    "f2b_telegram": "/var/log/f2b-telegram.log",
+    "iperf_update": "/var/log/iperf3-update.log",
+    "geoip_update": "/var/log/geoip-update.log",
+    "monitoring": "/var/log/server-monitor/monitor.log",
+    "admin_bot": "/var/log/server-monitor/admin-bot.log"
+  },
+  "scripts": {
+    "bin_dir": "/usr/local/bin",
+    "lib_dir": "/usr/local/lib/server-monitor",
+    "install_dir": "/opt/server-monitor"
+  },
+  "python": {
+    "admin_bot_dir": "/opt/server-monitor/bots",
+    "admin_bot_venv": "/opt/server-monitor/bots/admin_bot_venv",
+    "monitor_bot_dir": "/opt/server-monitor/bots",
+    "monitor_bot_venv": "/opt/server-monitor/bots/monitor_venv"
+  },
+  "temp": {
+    "base_dir": "/tmp/server-monitor"
+  }
+}

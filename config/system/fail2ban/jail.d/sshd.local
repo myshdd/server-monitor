@@ -1,0 +1,53 @@
+# /etc/fail2ban/jail.d/sshd.local
+
+# ============================================
+# УРОВЕНЬ 1: Классическая защита (быстрый brute-force)
+# ============================================
+[sshd]
+enabled = true
+port = ssh
+filter = sshd
+mode = aggressive
+# Ubuntu 24.04 использует systemd journal
+backend = systemd
+journalmatch = _SYSTEMD_UNIT=ssh.service + _COMM=sshd
+
+# 3 неудачные попытки за 10 минут = бан на 1 час
+maxretry = 3
+findtime = 600
+bantime = 3600
+action = iptables-allports[name=SSH]
+         telegram
+
+# ============================================
+# УРОВЕНЬ 2: Повторные нарушители
+# ============================================
+[sshd-repeat-offender]
+enabled = true
+filter = sshd-repeat-offender
+logpath = /var/log/fail2ban.log
+
+# Если IP банился 3 раза — бан на 7 дней
+maxretry = 3
+findtime = 604800
+bantime = 604800
+banaction = iptables-allports
+action = iptables-allports[name=SSH-repeat]
+         telegram
+
+# ============================================
+# УРОВЕНЬ 3: Злостные нарушители — перманентный бан
+# ============================================
+[sshd-persistent-offender]
+enabled = true
+filter = sshd-persistent-offender
+logpath = /var/log/fail2ban.log
+
+# Если IP банился 5 раз за 30 дней — перманентный бан
+maxretry = 5
+findtime = 2592000
+bantime = -1
+banaction = iptables-allports
+action = iptables-allports[name=SSH-persistent]
+         telegram
+

@@ -1,0 +1,14 @@
+# /etc/fail2ban/jail.d/distributed-attack.local
+
+# Любая попытка с несуществующим пользователем = мгновенный бан
+[sshd-invalid-user]
+enabled = true
+filter = sshd-invalid-user
+backend = systemd
+journalmatch = _SYSTEMD_UNIT=ssh.service + _COMM=sshd
+maxretry = 1
+findtime = 86400
+bantime = 86400
+banaction = iptables-allports
+action = iptables-allports[name=SSH-invalid]
+         telegram
