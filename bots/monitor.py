@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# /root/monitoring/telemonitor/monitor_v2.py
+# /opt/server-monitor/bots/monitor.py
 # Мониторинг сервера с отправкой уведомлений в Telegram
 
 import asyncio
