@@ -105,7 +105,7 @@ nano config/secrets.json
     └── install.sh                # Установка Server Monitor
 ```
 
-### Вызовы скриптов
+```Вызовы скриптов
 
 Из admin_bot.py
 Скрипт	                  Описание
@@ -113,8 +113,7 @@ clear-swap.sh	            Очистка swap памяти
 collect-network-stats.sh	Сбор сетевой статистики
 f2b-status.sh	            Статус fail2ban
 speedtest-iperf.sh	      Тест скорости через iperf3
-
-### Вызовы скриптов
+```
 
 ## Конфигурация
 
