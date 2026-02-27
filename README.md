@@ -105,8 +105,9 @@ nano config/secrets.json
     └── install.sh                # Установка Server Monitor
 ```
 
-```Вызовы скриптов
+### Вызовы скриптов
 
+```
 Из admin_bot.py
 Скрипт	                  Описание
 clear-swap.sh	            Очистка swap памяти
