@@ -47,6 +47,8 @@ PACKAGES=(
     "tcpdump"
     "whois"
     "socat"
+    "traceroute"
+    "dnsutils"
     # Утилиты
     "curl"
     "wget"
@@ -63,6 +65,8 @@ PACKAGES=(
     # Мониторинг
     "monit"
     "sysstat"
+    # Тестирование и диагностика
+    "stress-ng"
     # Python
     "python3-full"
     "python3-venv"

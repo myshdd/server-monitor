@@ -1,0 +1,2 @@
+check program time_check with path "/bin/sh -c 'timedatectl show -p NTPSynchronized --value | grep -q yes'"
+    if status != 0 then exec "/usr/local/bin/monit-alert.sh '⚠️ [TIMEDATECTL] Время не синхронизировано!'"

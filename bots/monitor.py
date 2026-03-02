@@ -35,9 +35,6 @@ try:
     
     # Пороги из конфига
     CHECK_INTERVAL = config.get_setting("monitoring.check_interval", 180)
-    CPU_THRESHOLD = config.get_setting("monitoring.thresholds.cpu", 80)
-    RAM_THRESHOLD = config.get_setting("monitoring.thresholds.ram", 90)
-    DISK_THRESHOLD = config.get_setting("monitoring.thresholds.disk", 95)
     
     # Настройки SSH мониторинга
     SSH_MONITOR_ENABLED = config.get_setting("monitoring.ssh_monitor.enabled", True)
@@ -50,7 +47,6 @@ try:
     
     logger.info("Конфигурация успешно загружена")
     logger.info(f"Интервал проверки: {CHECK_INTERVAL} сек")
-    logger.info(f"Пороги: CPU={CPU_THRESHOLD}%, RAM={RAM_THRESHOLD}%, DISK={DISK_THRESHOLD}%")
     
 except ConfigError as e:
     print(f"❌ Ошибка загрузки конфигурации: {e}", file=sys.stderr)
@@ -61,18 +57,6 @@ except ConfigError as e:
 # ============================================
 
 # Состояние алертов (чтобы не спамить)
-alert_status = {
-    'cpu': False,
-    'ram': False,
-    'disk': False
-}
-
-# Rate limiting для SSH алертов
-ssh_alerts = defaultdict(list)  # {ip: [timestamp1, timestamp2, ...]}
-
-
-# ============================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ============================================
 
 async def should_alert_ssh(ip: str) -> bool:
@@ -94,53 +78,6 @@ async def should_alert_ssh(ip: str) -> bool:
 # ============================================
 # ОТПРАВКА УВЕДОМЛЕНИЙ В TELEGRAM
 # ============================================
-
-async def send_alert(bot: Bot, resource: str, value: float):
-    """
-    Отправляет уведомление о превышении порога ресурса.
-    
-    Args:
-        bot: Экземпляр Telegram Bot
-        resource: Название ресурса (CPU, RAM, DISK)
-        value: Текущее значение в процентах
-    """
-    message = (
-        f"⚠️ *ВНИМАНИЕ! Проблема на сервере!*\n\n"
-        f"*Ресурс:* {resource}\n"
-        f"*Текущее значение:* {value:.1f}%\n"
-        f"*Порог:* превышен\n"
-        f"*Время:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    )
-    
-    try:
-        await bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
-        logger.warning(f"Алерт отправлен: {resource} = {value:.1f}%")
-    except Exception as e:
-        logger.error(f"Ошибка отправки алерта: {e}")
-
-
-async def send_recovery(bot: Bot, resource: str, value: float):
-    """
-    Отправляет уведомление о восстановлении ресурса в норму.
-    
-    Args:
-        bot: Экземпляр Telegram Bot
-        resource: Название ресурса (CPU, RAM, DISK)
-        value: Текущее значение в процентах
-    """
-    message = (
-        f"✅ *Восстановлено!*\n\n"
-        f"*Ресурс:* {resource}\n"
-        f"*Текущее значение:* {value:.1f}% (в норме)\n"
-        f"*Время:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    )
-    
-    try:
-        await bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
-        logger.info(f"Восстановление: {resource} = {value:.1f}%")
-    except Exception as e:
-        logger.error(f"Ошибка отправки уведомления о восстановлении: {e}")
-
 
 async def send_ssh_alert(bot: Bot, alert_type: str, user: str, ip: str, reason: str = ""):
     """
@@ -220,64 +157,6 @@ async def send_port_alert(bot: Bot, container: str, port: int, protocol: str, st
         logger.info(f"Порт {status}: {container}:{port}/{protocol}")
     except Exception as e:
         logger.error(f"Ошибка отправки уведомления о порте: {e}")
-
-# ============================================
-# МОНИТОРИНГ РЕСУРСОВ (CPU, RAM, DISK)
-# ============================================
-
-async def check_and_alert(bot: Bot):
-    """
-    Проверяет использование ресурсов и отправляет алерты при превышении порогов.
-    Также отправляет уведомления о восстановлении.
-    """
-    global alert_status
-    
-    # CPU
-    cpu_percent = psutil.cpu_percent(interval=1)
-    if cpu_percent > CPU_THRESHOLD and not alert_status['cpu']:
-        await send_alert(bot, 'Процессор (CPU)', cpu_percent)
-        alert_status['cpu'] = True
-    elif cpu_percent <= CPU_THRESHOLD and alert_status['cpu']:
-        await send_recovery(bot, 'Процессор (CPU)', cpu_percent)
-        alert_status['cpu'] = False
-    
-    # RAM
-    ram_percent = psutil.virtual_memory().percent
-    if ram_percent > RAM_THRESHOLD and not alert_status['ram']:
-        await send_alert(bot, 'Оперативная память (RAM)', ram_percent)
-        alert_status['ram'] = True
-    elif ram_percent <= RAM_THRESHOLD and alert_status['ram']:
-        await send_recovery(bot, 'Оперативная память (RAM)', ram_percent)
-        alert_status['ram'] = False
-    
-    # DISK
-    disk_percent = psutil.disk_usage('/').percent
-    if disk_percent > DISK_THRESHOLD and not alert_status['disk']:
-        await send_alert(bot, 'Дисковое пространство (/)', disk_percent)
-        alert_status['disk'] = True
-    elif disk_percent <= DISK_THRESHOLD and alert_status['disk']:
-        await send_recovery(bot, 'Дисковое пространство (/)', disk_percent)
-        alert_status['disk'] = False
-    
-    # Логирование
-    logger.debug(f"Проверка: CPU={cpu_percent}%, RAM={ram_percent}%, DISK={disk_percent}%")
-    print(f"[{time.ctime()}] Проверка завершена. CPU: {cpu_percent}%, RAM: {ram_percent}%, DISK: {disk_percent}%")
-
-
-async def monitor_resources(bot: Bot):
-    """
-    Основной цикл мониторинга ресурсов.
-    Проверяет CPU, RAM, DISK каждые CHECK_INTERVAL секунд.
-    """
-    logger.info(f"Запуск мониторинга ресурсов (интервал: {CHECK_INTERVAL} сек)")
-    
-    while True:
-        try:
-            await check_and_alert(bot)
-        except Exception as e:
-            logger.error(f"Ошибка в мониторинге ресурсов: {e}")
-        
-        await asyncio.sleep(CHECK_INTERVAL)
 
 # ============================================
 # МОНИТОРИНГ SSH ВХОДОВ
@@ -624,7 +503,6 @@ async def main():
             text=(
                 "🚀 *Server Monitor v2 запущен!*\n\n"
                 f"📊 Интервал проверки: {CHECK_INTERVAL} сек\n"
-                f"⚙️ Пороги: CPU={CPU_THRESHOLD}%, RAM={RAM_THRESHOLD}%, DISK={DISK_THRESHOLD}%\n"
                 f"🔐 SSH мониторинг: {'✅' if SSH_MONITOR_ENABLED else '❌'}\n"
                 f"🐳 Docker мониторинг: {'✅' if PORT_MONITOR_ENABLED else '❌'}"
             ),
@@ -636,7 +514,6 @@ async def main():
     
     # Собираем задачи для запуска
     tasks = [
-        asyncio.create_task(monitor_resources(bot)),
     ]
     
     if SSH_MONITOR_ENABLED:

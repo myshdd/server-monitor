@@ -1,0 +1,17 @@
+check system wg
+    # CPU load - только при реальных проблемах
+    if loadavg (1min) > 4 then exec "/usr/local/bin/monit-alert.sh load1_high"
+    if loadavg (5min) > 3 then exec "/usr/local/bin/monit-alert.sh load5_high"
+    if loadavg (15min) > 2.5 then exec "/usr/local/bin/monit-alert.sh load15_high"
+
+    # Восстановление - только когда нагрузка упала значительно
+    if loadavg (1min) < 2 then exec "/usr/local/bin/monit-alert.sh load1_ok"
+    if loadavg (5min) < 1.5 then exec "/usr/local/bin/monit-alert.sh load5_ok"
+
+    # Память
+    if memory usage > 85% then exec "/usr/local/bin/monit-alert.sh memory_high"
+    if memory usage < 75% then exec "/usr/local/bin/monit-alert.sh memory_ok"
+
+    # SWAP
+    if swap usage > 20% then exec "/usr/local/bin/monit-alert.sh swap_high"
+    if swap usage < 15% then exec "/usr/local/bin/monit-alert.sh swap_ok"

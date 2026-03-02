@@ -5,35 +5,51 @@
 ## Возможности
 
 ### 📱 Telegram Admin Bot
-- Управление системой через Telegram
-- Мониторинг ресурсов (CPU, RAM, диск, сеть)
-- Управление fail2ban
-- Speedtest и сетевая статистика
-- Обновление системы
-- Управление Docker контейнерами
+- **Управление системой** через Telegram
+- **Мониторинг ресурсов** (CPU, RAM, диск, сеть)
+- **Управление fail2ban** (просмотр и разбан IP)
+- **Speedtest** и сетевая статистика
+- **Обновление системы**
+- **Управление Docker контейнерами**
+- **Дополнительные команды:**
+  - 🌐 Сеть: открытые порты, активные соединения, SSH сессии, traceroute
+  - 🛡️ Безопасность: история входов, sudo логи
+  - 🔍 Диагностика: топ процессов по CPU/RAM, большие файлы, I/O wait, тест DNS
+  - 🐳 Docker: статистика контейнеров, размер образов
+  - ⚙️ Процессы: zombie процессы, количество потоков
+  - 📦 Система: uptime, упавшие сервисы, история apt, размер кэша
 
 ### 🔔 Telegram Monitor Bot
-- Автоматический мониторинг ресурсов
+- Автоматический мониторинг ресурсов (CPU, RAM, Disk, Swap)
 - Уведомления о превышении порогов
 - Мониторинг SSH попыток входа
 - Уведомления fail2ban о блокировках
+- Мониторинг Docker контейнеров
 
 ### 🛡️ Fail2ban
 - Многоуровневая защита SSH
 - Детекция медленных brute-force атак
 - Автоматическая блокировка по подсетям
 - Telegram уведомления о блокировках
+- Ежедневные отчёты и алерты аномалий
 
-### 📊 Мониторинг
-- Сбор сетевой статистики
-- Мониторинг GeoIP
-- Speedtest с несколькими серверами
-- Статистика использования ресурсов
+### 📊 Мониторинг (Monit)
+- Проверка сервисов (SSH, Docker, Fail2ban, Cron и др.)
+- Мониторинг ресурсов (CPU load, Memory, Swap, Disk)
+- Telegram уведомления о проблемах
+- Автоматический перезапуск упавших сервисов
 
-### Требования
-- Ubuntu 24.04 LTS (или новее)
-- Root доступ
-- Telegram Bot Token (получить у [@BotFather](https://t.me/botfather))
+### 🌍 GeoIP
+- Блокировка SSH по странам
+- Whitelist для своих IP и DDNS доменов
+- Автоматическое обновление баз GeoIP
+
+## Требования
+- **Ubuntu 24.04 LTS** (или новее)
+- **Root доступ**
+- **Telegram Bot Token** (получить у [@BotFather](https://t.me/botfather))
+
+## Установка
 
 ### Новый сервер (полная установка)
 
@@ -43,16 +59,20 @@ cd /opt
 git clone https://github.com/myshdd/server-monitor.git
 cd server-monitor
 
-# 2. Первичная настройка (локаль, timezone, пользователи)
+# 2. Первичная настройка сервера (локаль, timezone, пользователи)
 ./install/setup-server-init.sh
 # Потребуется перезагрузка
 
-# 3. После reboot - настройка секретов
+# 3. После перезагрузки - настройка секретов
 cp config/examples/secrets.json.example config/secrets.json
 nano config/secrets.json
 
-# 4. Основная установка
+# 4. Полная установка
 ./install/setup.sh
+
+# 5. Запуск сервисов
+systemctl enable --now telegram-admin-bot telegram-monitor
+systemctl restart fail2ban monit
 ```
 
 ### Сервер уже настроен
@@ -64,6 +84,7 @@ cd server-monitor
 cp config/examples/secrets.json.example config/secrets.json
 nano config/secrets.json
 ./install/setup.sh
+systemctl enable --now telegram-admin-bot telegram-monitor
 ```
 
 ## Структура проекта
@@ -90,7 +111,8 @@ nano config/secrets.json
 │   └── system/                   # Конфиги системных пакетов
 │       ├── fail2ban/
 │       ├── iperf3/
-│       └── monit/
+│       ├── monit/
+│       └── conf-enabled/         # Конфиги проверок Monit
 ├── lib/                           # Библиотеки
 │   ├── config.py                 # Python библиотека конфигурации
 │   └── load-config.sh            # Bash библиотека конфигурации
@@ -137,6 +159,16 @@ speedtest-iperf.sh	      Тест скорости через iperf3
 
 ```json
 {
+  "monitoring": {
+    "check_interval": 180,
+    "thresholds": {
+      "cpu": 80,
+      "ram": 90,
+      "disk": 95,
+      "swap": 80
+    }
+  },
+{
   "geoip": {
     "whitelist_ips": ["127.0.0.0/8", "YOUR_IP"],
     "whitelist_domains": ["your.ddns.net"]
@@ -171,6 +203,51 @@ journalctl -u telegram-monitor -f
 Основные команды:
 - `/start` - запуск бота
 
+Telegram Admin Bot - Команды
+
+Главное меню:
+
+    📊 Статистика
+    🔒 Забаненные IP
+    📊 Графики нагрузки
+    🐳 Docker контейнеры
+    📋 Системная информация
+    📦 Обновление системы
+    📁 Просмотр логов
+    🛡️ Fail2ban Dashboard
+    📡 Тест скорости
+    🔧 Дополнительные команды
+
+**Дополнительные команды:**
+
+🌐 **Сеть:**
+- Открытые порты
+- Активные соединения
+- SSH сессии
+- Traceroute
+
+🛡️ **Безопасность:**
+- Последние входы
+- Sudo логи
+
+🔍 **Диагностика:**
+- Top CPU процессы
+- Top RAM процессы
+- Zombie процессы
+- Thread count
+- Большие файлы
+- I/O wait
+- Тест DNS
+
+🐳 **Docker:**
+- Docker stats
+- Images size
+
+📦 **Система:**
+- Uptime
+- Systemd failed
+- Apt history
+- Apt cache size
 
 ## Обновление
 
@@ -237,6 +314,7 @@ TOKEN=$(get_secret "telegram.admin_bot_token")
 - ✅ Telegram боты работают только с авторизованными пользователями
 - ✅ GeoIP блокировка SSH (только РФ + whitelist)
 - ✅ Whitelist для своих IP и DDNS доменов
+- ✅ Monit контролирует работу сервисов
 
 ## Устранение проблем
 
@@ -269,6 +347,15 @@ chmod +x /opt/server-monitor/scripts/*/*.sh
 
 # Проверьте логи fail2ban
 tail -f /var/log/fail2ban.log
+```
+
+### Monit не отправляет уведомления
+```bash
+# Тест скрипта
+/usr/local/bin/monit-alert.sh swap_high
+
+# Проверьте логи
+journalctl -u monit -f
 ```
 
 ## Лицензия

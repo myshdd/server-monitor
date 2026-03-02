@@ -1,0 +1,5 @@
+check process rsyslog matching "rsyslogd"
+    start program = "/usr/bin/systemctl start rsyslog"
+    stop program = "/usr/bin/systemctl stop rsyslog"
+    if not exist for 2 cycles then exec "/usr/local/bin/monit-alert.sh '⚠️ Rsyslog не работает! Логи могут не писаться.'"
+    if exist for 2 cycles then exec "/usr/local/bin/monit-alert.sh '✅ Rsyslog сервис восстановлен!'"

@@ -118,6 +118,7 @@ def main_menu_keyboard():
         [InlineKeyboardButton("📦 Обновление системы", callback_data='update_system')],
         [InlineKeyboardButton("📁 Просмотр логов", callback_data='logs_menu')],
         [InlineKeyboardButton("🛡️ Fail2ban Dashboard", callback_data='f2b_status')],
+        [InlineKeyboardButton("🔧 Дополнительные команды", callback_data='extra_menu')],
         [InlineKeyboardButton("📡 Тест скорости", callback_data='iperf_speedtest')],
         [
             InlineKeyboardButton("🔄 Перезагрузка", callback_data='reboot'),
@@ -1893,6 +1894,21 @@ async def execute_power_action(update: Update, context: ContextTypes.DEFAULT_TYP
             logger.error(f"Ошибка выключения: {e}")
             await query.edit_message_text(f"❌ Ошибка выключения: {str(e)}")
 
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /cancel"""
+    if update.effective_user.id != ALLOWED_USER_ID:
+        return
+    
+    # Сбрасываем все флаги ожидания
+    context.user_data['awaiting_unban_ip'] = False
+    context.user_data['awaiting_log_path'] = False
+    context.user_data['awaiting_traceroute'] = False
+    
+    await update.message.reply_text(
+        "❌ Операция отменена",
+        reply_markup=main_menu_keyboard()
+    )
+
 # ============================================
 # ОБРАБОТЧИК ТЕКСТОВЫХ СООБЩЕНИЙ
 # Обработка ввода пользователя (IP для разбана, путь к логам и т.д.)
@@ -1904,6 +1920,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Используется для:
     - Ввода IP-адреса для разбана
     - Ввода пути к лог-файлу
+    - Ввода адреса для traceroute
     - Обработки команды /cancel
     """
     # Проверка авторизации
@@ -1916,10 +1933,27 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == '/cancel':
         context.user_data['awaiting_unban_ip'] = False
         context.user_data['awaiting_log_path'] = False
+        context.user_data['awaiting_traceroute'] = False
         await update.message.reply_text(
             "❌ Операция отменена",
             reply_markup=main_menu_keyboard()
         )
+        return
+    
+    # Обработка ввода адреса для traceroute
+    if context.user_data.get('awaiting_traceroute'):
+        context.user_data['awaiting_traceroute'] = False
+        target = text
+        
+        # Базовая валидация (IP или домен)
+        if re.match(r'^[\w\.\-]+$', target):
+            await execute_traceroute(update, context, target)
+        else:
+            await update.message.reply_text(
+                "❌ Неверный формат адреса.\n\n"
+                "Используйте IP или домен без спецсимволов.",
+                reply_markup=main_menu_keyboard()
+            )
         return
     
     # Обработка ввода IP для разбана
@@ -2073,6 +2107,1003 @@ async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("🤖 *Admin Bot v2*", reply_markup=main_menu_keyboard(), parse_mode='Markdown')
 
 # ============================================
+# ДОПОЛНИТЕЛЬНЫЕ КОМАНДЫ
+# ============================================
+
+def extra_menu_keyboard():
+    """Меню дополнительных команд по категориям"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🌐 Сеть", callback_data='extra_network')],
+        [InlineKeyboardButton("🛡️ Безопасность", callback_data='extra_security')],
+        [InlineKeyboardButton("🔍 Диагностика", callback_data='extra_diagnostics')],
+        [InlineKeyboardButton("🐳 Docker", callback_data='extra_docker')],
+        [InlineKeyboardButton("📦 Система", callback_data='extra_system')],
+        [InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')],
+    ])
+
+def extra_network_keyboard():
+    """Подменю: Сеть"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔌 Открытые порты", callback_data='cmd_open_ports')],
+        [InlineKeyboardButton("🌍 Активные соединения", callback_data='cmd_active_connections')],
+        [InlineKeyboardButton("🔐 SSH сессии", callback_data='cmd_ssh_sessions')],
+        [InlineKeyboardButton("🔍 Trace route", callback_data='cmd_traceroute')],
+        [InlineKeyboardButton("🔙 Назад", callback_data='extra_menu')],
+    ])
+
+def extra_security_keyboard():
+    """Подменю: Безопасность"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("👤 Последние входы", callback_data='cmd_last_logins')],
+        [InlineKeyboardButton("🔒 Sudo логи", callback_data='cmd_sudo_logs')],
+        [InlineKeyboardButton("🔙 Назад", callback_data='extra_menu')],
+    ])
+
+def extra_diagnostics_keyboard():
+    """Подменю: Диагностика"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔝 Top CPU процессы", callback_data='cmd_top_cpu')],
+        [InlineKeyboardButton("💾 Top RAM процессы", callback_data='cmd_top_ram')],
+        [InlineKeyboardButton("🔥 Zombie процессы", callback_data='cmd_zombie')],
+        [InlineKeyboardButton("🧵 Thread count", callback_data='cmd_threads')],
+        [InlineKeyboardButton("🗂️ Большие файлы", callback_data='cmd_big_files')],
+        [InlineKeyboardButton("📉 I/O wait", callback_data='cmd_io_wait')],
+        [InlineKeyboardButton("🧪 Test DNS", callback_data='cmd_test_dns')],
+        [InlineKeyboardButton("🔙 Назад", callback_data='extra_menu')],
+    ])
+
+def extra_docker_keyboard():
+    """Подменю: Docker"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Docker stats", callback_data='cmd_docker_stats')],
+        [InlineKeyboardButton("📦 Images size", callback_data='cmd_docker_images')],
+        [InlineKeyboardButton("🔙 Назад", callback_data='extra_menu')],
+    ])
+
+def extra_system_keyboard():
+    """Подменю: Система"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📅 Uptime", callback_data='cmd_uptime')],
+        [InlineKeyboardButton("🔄 Systemd failed", callback_data='cmd_systemd_failed')],
+        [InlineKeyboardButton("📦 Apt history", callback_data='cmd_apt_history')],
+        [InlineKeyboardButton("🧹 Apt cache size", callback_data='cmd_apt_cache')],
+        [InlineKeyboardButton("🔙 Назад", callback_data='extra_menu')],
+    ])
+
+# ============================================
+# ДОПОЛНИТЕЛЬНЫЕ КОМАНДЫ - НАВИГАЦИЯ
+# ============================================
+
+async def show_extra_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать меню дополнительных команд"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "➕ *ДОПОЛНИТЕЛЬНЫЕ КОМАНДЫ*\n\n"
+        "Выберите категорию:",
+        parse_mode='Markdown',
+        reply_markup=extra_menu_keyboard()
+    )
+
+async def show_extra_network(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подменю: Сеть"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "🌐 *СЕТЬ*\n\n"
+        "Выберите команду:",
+        parse_mode='Markdown',
+        reply_markup=extra_network_keyboard()
+    )
+
+async def show_extra_security(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подменю: Безопасность"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "🛡️ *БЕЗОПАСНОСТЬ*\n\n"
+        "Выберите команду:",
+        parse_mode='Markdown',
+        reply_markup=extra_security_keyboard()
+    )
+
+async def show_extra_diagnostics(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подменю: Диагностика"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "🔍 *ДИАГНОСТИКА*\n\n"
+        "Выберите команду:",
+        parse_mode='Markdown',
+        reply_markup=extra_diagnostics_keyboard()
+    )
+
+async def show_extra_docker(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подменю: Docker"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "🐳 *DOCKER*\n\n"
+        "Выберите команду:",
+        parse_mode='Markdown',
+        reply_markup=extra_docker_keyboard()
+    )
+
+async def show_extra_system(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подменю: Система"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "📦 *СИСТЕМА И ПАКЕТЫ*\n\n"
+        "Выберите команду:",
+        parse_mode='Markdown',
+        reply_markup=extra_system_keyboard()
+    )
+
+# ============================================
+# ДОПОЛНИТЕЛЬНЫЕ КОМАНДЫ - РЕАЛИЗАЦИЯ
+# ============================================
+
+# --- СЕТЬ ---
+
+async def cmd_open_ports(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать открытые порты (ss -tlnp)"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['ss', '-tlnp'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        output = result.stdout.strip()
+        
+        # Парсим вывод для красивого отображения
+        lines = output.split('\n')
+        if len(lines) > 1:
+            message = "🔌 *ОТКРЫТЫЕ ПОРТЫ*\n\n```\n"
+            # Ограничиваем вывод
+            for line in lines[:20]:
+                message += line[:80] + "\n"
+            if len(lines) > 20:
+                message += f"\n... и ещё {len(lines) - 20} строк\n"
+            message += "```"
+        else:
+            message = "🔌 *ОТКРЫТЫЕ ПОРТЫ*\n\nНет открытых портов"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_open_ports: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_network')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_active_connections(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать топ активных соединений по IP"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['ss', '-tn', 'state', 'established'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        lines = result.stdout.strip().split('\n')[1:]  # Пропускаем заголовок
+        
+        ip_count = {}
+        for line in lines:
+            parts = line.split()
+            if len(parts) >= 4:
+                peer = parts[3]  # Исправлено: индекс 3, не 4
+                # Обработка IPv6 [addr]:port и IPv4 addr:port
+                if peer.startswith('['):
+                    # IPv6: [2a0d:6c2:24:347::]:40052
+                    match = re.match(r'\[([^\]]+)\]:(\d+)', peer)
+                    if match:
+                        ip = match.group(1)
+                    else:
+                        ip = peer
+                else:
+                    # IPv4: 185.254.158.38:22
+                    ip = peer.rsplit(':', 1)[0]
+                
+                ip_count[ip] = ip_count.get(ip, 0) + 1
+        
+        if ip_count:
+            sorted_ips = sorted(ip_count.items(), key=lambda x: x[1], reverse=True)[:15]
+            
+            message = "🌍 *АКТИВНЫЕ СОЕДИНЕНИЯ*\n\n"
+            message += f"Всего соединений: {len(lines)}\n\n"
+            message += "*Топ IP по количеству:*\n"
+            for ip, count in sorted_ips:
+                # Сокращаем длинные IPv6
+                display_ip = ip if len(ip) <= 25 else ip[:22] + "..."
+                message += f"`{display_ip}` — {count}\n"
+        else:
+            message = "🌍 *АКТИВНЫЕ СОЕДИНЕНИЯ*\n\nНет активных соединений"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_active_connections: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_network')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_ssh_sessions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать активные SSH сессии"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        # who показывает залогиненных пользователей
+        result = subprocess.run(
+            ['who'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        lines = result.stdout.strip().split('\n')
+        
+        if lines and lines[0]:
+            message = "🔐 *SSH СЕССИИ*\n\n"
+            message += f"Активных сессий: {len(lines)}\n\n"
+            message += "```\n"
+            for line in lines:
+                message += line + "\n"
+            message += "```"
+        else:
+            message = "🔐 *SSH СЕССИИ*\n\n✅ Нет активных сессий"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_ssh_sessions: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_network')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_ssh_sessions_sec(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать активные SSH сессии (возврат в меню безопасности)"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['who'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        lines = result.stdout.strip().split('\n')
+        
+        if lines and lines[0]:
+            message = "🔐 *SSH СЕССИИ*\n\n"
+            message += f"Активных сессий: {len(lines)}\n\n"
+            message += "```\n"
+            for line in lines:
+                message += line + "\n"
+            message += "```"
+        else:
+            message = "🔐 *SSH СЕССИИ*\n\n✅ Нет активных сессий"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_ssh_sessions_sec: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_security')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_uptime(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать uptime системы"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        # Uptime
+        boot_time = datetime.fromtimestamp(psutil.boot_time())
+        uptime = datetime.now() - boot_time
+        
+        days = uptime.days
+        hours, remainder = divmod(uptime.seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        
+        # Load average
+        load_avg = psutil.getloadavg()
+        
+        # Количество пользователей
+        users = len(psutil.users())
+        
+        message = "📅 *UPTIME*\n\n"
+        message += f"🕐 *Время работы:* {days}д {hours}ч {minutes}м {seconds}с\n\n"
+        message += f"📅 *Запущен:* {boot_time.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        message += f"📈 *Load Average:* {load_avg[0]:.2f}, {load_avg[1]:.2f}, {load_avg[2]:.2f}\n\n"
+        message += f"👥 *Пользователей онлайн:* {users}"
+            
+    except Exception as e:
+        logger.error(f"Ошибка cmd_uptime: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_system')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_systemd_failed(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать упавшие systemd сервисы"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['systemctl', '--failed', '--no-pager', '--no-legend'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        output = result.stdout.strip()
+        
+        if output:
+            lines = output.split('\n')
+            message = "🔄 *УПАВШИЕ СЕРВИСЫ*\n\n"
+            message += f"❌ Найдено проблем: {len(lines)}\n\n"
+            message += "```\n"
+            for line in lines[:15]:
+                message += line[:70] + "\n"
+            if len(lines) > 15:
+                message += f"\n... и ещё {len(lines) - 15}\n"
+            message += "```"
+        else:
+            message = "🔄 *УПАВШИЕ СЕРВИСЫ*\n\n✅ Все сервисы работают нормально"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_systemd_failed: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_system')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_traceroute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Запрос адреса для traceroute"""
+    query = update.callback_query
+    await query.answer()
+    
+    context.user_data['awaiting_traceroute'] = True
+    
+    await query.edit_message_text(
+        "🔍 *TRACEROUTE*\n\n"
+        "Введите IP-адрес или домен для трассировки:\n\n"
+        "Например: `8.8.8.8` или `google.com`\n\n"
+        "Для отмены отправьте /cancel",
+        parse_mode='Markdown'
+    )
+
+async def execute_traceroute(update: Update, context: ContextTypes.DEFAULT_TYPE, target: str):
+    """Выполнить traceroute к указанному адресу"""
+    await update.message.reply_text(f"🔍 Выполняю traceroute к `{target}`...\nЭто может занять до 30 секунд.", parse_mode='Markdown')
+
+    try:
+        result = subprocess.run(
+            ['traceroute', '-m', '10', '-w', '1', '-q', '1', target],
+            capture_output=True,
+            text=True,
+            timeout=45
+        )
+
+        output = result.stdout.strip()
+
+        if output:
+            message = f"🔍 *TRACEROUTE → {target}*\n\n```\n"
+            lines = output.split('\n')
+            for line in lines[:15]:
+                message += line[:65] + "\n"
+            if len(lines) > 15:
+                message += f"\n... и ещё {len(lines) - 15} хопов\n"
+            message += "```"
+        else:
+            message = f"❌ Не удалось выполнить traceroute к {target}"
+            if result.stderr:
+                message += f"\n\n{result.stderr}"
+
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут (45 сек). Хост может быть недоступен или блокирует ICMP."
+    except FileNotFoundError:
+        message = "❌ traceroute не установлен. Установите: `apt install traceroute`"
+    except Exception as e:
+        logger.error(f"Ошибка traceroute: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+
+    keyboard = [[InlineKeyboardButton("🔙 К меню сети", callback_data='extra_network')]]
+    await update.message.reply_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+# --- БЕЗОПАСНОСТЬ ---
+
+async def cmd_last_logins(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать последние входы в систему"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['last', '-n', '15', '-a'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        output = result.stdout.strip()
+        
+        if output:
+            message = "👤 *ПОСЛЕДНИЕ ВХОДЫ*\n\n```\n"
+            lines = output.split('\n')
+            for line in lines[:15]:
+                if line.strip():
+                    message += line[:75] + "\n"
+            message += "```"
+        else:
+            message = "👤 *ПОСЛЕДНИЕ ВХОДЫ*\n\nНет данных"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_last_logins: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_security')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_sudo_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать последние sudo команды"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        # Пробуем разные источники логов sudo
+        log_files = ['/var/log/auth.log', '/var/log/secure']
+        log_file = None
+        
+        for f in log_files:
+            if os.path.exists(f):
+                log_file = f
+                break
+        
+        if log_file:
+            result = subprocess.run(
+                ['grep', '-a', 'sudo', log_file],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            lines = result.stdout.strip().split('\n')
+            # Берём последние 15 строк
+            recent = [l for l in lines if l.strip()][-15:]
+            
+            if recent:
+                message = "🔒 *SUDO ЛОГИ*\n\n```\n"
+                for line in recent:
+                    # Сокращаем длинные строки
+                    message += line[:70] + "\n"
+                message += "```"
+            else:
+                message = "🔒 *SUDO ЛОГИ*\n\n✅ Нет записей sudo"
+        else:
+            message = "🔒 *SUDO ЛОГИ*\n\n❌ Лог-файл не найден"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_sudo_logs: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_security')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+# --- ДИАГНОСТИКА ---
+
+async def cmd_top_cpu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать топ процессов по CPU"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['ps', 'aux', '--sort=-%cpu'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        lines = result.stdout.strip().split('\n')
+        
+        message = "🔝 *TOP CPU ПРОЦЕССЫ*\n\n```\n"
+        # Заголовок
+        message += "CPU%  MEM%  COMMAND\n"
+        message += "-" * 30 + "\n"
+        
+        # Топ 10 процессов (пропускаем заголовок)
+        for line in lines[1:11]:
+            parts = line.split()
+            if len(parts) >= 11:
+                cpu = parts[2]
+                mem = parts[3]
+                cmd = parts[10][:20]
+                message += f"{cpu:>5} {mem:>5}  {cmd}\n"
+        
+        message += "```"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_top_cpu: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_diagnostics')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_top_ram(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать топ процессов по RAM"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['ps', 'aux', '--sort=-%mem'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        lines = result.stdout.strip().split('\n')
+        
+        message = "💾 *TOP RAM ПРОЦЕССЫ*\n\n```\n"
+        message += "MEM%  CPU%  COMMAND\n"
+        message += "-" * 30 + "\n"
+        
+        for line in lines[1:11]:
+            parts = line.split()
+            if len(parts) >= 11:
+                cpu = parts[2]
+                mem = parts[3]
+                cmd = parts[10][:20]
+                message += f"{mem:>5} {cpu:>5}  {cmd}\n"
+        
+        message += "```"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_top_ram: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_diagnostics')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_big_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать большие файлы на диске"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        # Ищем файлы больше 100MB
+        result = subprocess.run(
+            ['find', '/', '-type', 'f', '-size', '+100M', '-exec', 'ls', '-lh', '{}', ';'],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        lines = result.stdout.strip().split('\n')
+        # Фильтруем пустые строки
+        files = [l for l in lines if l.strip()]
+        
+        if files:
+            message = "🗂️ *БОЛЬШИЕ ФАЙЛЫ (>100MB)*\n\n```\n"
+            for line in files[:15]:
+                parts = line.split()
+                if len(parts) >= 9:
+                    size = parts[4]
+                    path = ' '.join(parts[8:])
+                    # Сокращаем путь
+                    if len(path) > 40:
+                        path = "..." + path[-37:]
+                    message += f"{size:>6}  {path}\n"
+            
+            if len(files) > 15:
+                message += f"\n... и ещё {len(files) - 15} файлов\n"
+            message += "```"
+        else:
+            message = "🗂️ *БОЛЬШИЕ ФАЙЛЫ*\n\n✅ Нет файлов больше 100MB"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут (поиск занял более 30 сек)"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_big_files: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_diagnostics')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_io_wait(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать I/O wait статистику"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['iostat', '-x', '1', '2'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        output = result.stdout.strip()
+        
+        if output:
+            # Берём последний блок вывода
+            blocks = output.split('\n\n')
+            last_block = blocks[-1] if blocks else output
+            
+            message = "📉 *I/O СТАТИСТИКА*\n\n```\n"
+            lines = last_block.split('\n')
+            for line in lines[:12]:
+                message += line[:65] + "\n"
+            message += "```"
+        else:
+            message = "📉 *I/O СТАТИСТИКА*\n\n❌ Нет данных"
+            
+    except FileNotFoundError:
+        message = "📉 *I/O СТАТИСТИКА*\n\n❌ iostat не установлен\n\nУстановите: `apt install sysstat`"
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_io_wait: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_diagnostics')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_test_dns(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Тестирование DNS"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        dns_servers = ['8.8.8.8', '1.1.1.1', '77.88.8.8']
+        test_domain = 'google.com'
+        
+        message = "🧪 *ТЕСТ DNS*\n\n"
+        
+        for dns in dns_servers:
+            try:
+                result = subprocess.run(
+                    ['dig', f'@{dns}', test_domain, '+short', '+time=2', '+tries=1'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                
+                if result.returncode == 0 and result.stdout.strip():
+                    ip = result.stdout.strip().split('\n')[0]
+                    message += f"✅ `{dns}` → {ip}\n"
+                else:
+                    message += f"❌ `{dns}` — нет ответа\n"
+                    
+            except subprocess.TimeoutExpired:
+                message += f"⏱️ `{dns}` — таймаут\n"
+            except Exception as e:
+                message += f"❌ `{dns}` — ошибка\n"
+        
+        # Проверяем системный DNS
+        message += "\n*Системный DNS:*\n"
+        try:
+            result = subprocess.run(
+                ['dig', test_domain, '+short', '+time=2'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.stdout.strip():
+                message += f"✅ Работает → {result.stdout.strip().split()[0]}"
+            else:
+                message += "❌ Не отвечает"
+        except:
+            message += "❌ Ошибка проверки"
+            
+    except FileNotFoundError:
+        message = "🧪 *ТЕСТ DNS*\n\n❌ dig не установлен\n\nУстановите: `apt install dnsutils`"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_test_dns: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_diagnostics')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+# --- DOCKER ---
+
+async def cmd_docker_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать статистику Docker контейнеров"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['docker', 'stats', '--no-stream', '--format', 
+             'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}'],
+            capture_output=True,
+            text=True,
+            timeout=15
+        )
+        
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            if output:
+                message = "📊 *DOCKER STATS*\n\n```\n"
+                lines = output.split('\n')
+                for line in lines[:15]:
+                    message += line[:65] + "\n"
+                if len(lines) > 15:
+                    message += f"\n... и ещё {len(lines) - 15}\n"
+                message += "```"
+            else:
+                message = "📊 *DOCKER STATS*\n\n✅ Нет запущенных контейнеров"
+        else:
+            message = f"📊 *DOCKER STATS*\n\n❌ Ошибка: {result.stderr}"
+            
+    except FileNotFoundError:
+        message = "📊 *DOCKER STATS*\n\n❌ Docker не установлен"
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_docker_stats: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_docker')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_docker_images(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать размер Docker образов"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['docker', 'images', '--format', 'table {{.Repository}}\t{{.Tag}}\t{{.Size}}'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            if output:
+                message = "📦 *DOCKER IMAGES*\n\n```\n"
+                lines = output.split('\n')
+                for line in lines[:15]:
+                    message += line[:65] + "\n"
+                if len(lines) > 15:
+                    message += f"\n... и ещё {len(lines) - 15}\n"
+                message += "```\n"
+                
+                # Общий размер
+                du_result = subprocess.run(
+                    ['docker', 'system', 'df', '--format', '{{.Type}}\t{{.Size}}'],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if du_result.returncode == 0:
+                    message += "\n*Использование диска:*\n```\n"
+                    message += du_result.stdout.strip()
+                    message += "\n```"
+            else:
+                message = "📦 *DOCKER IMAGES*\n\n✅ Нет образов"
+        else:
+            message = f"📦 *DOCKER IMAGES*\n\n❌ Ошибка: {result.stderr}"
+            
+    except FileNotFoundError:
+        message = "📦 *DOCKER IMAGES*\n\n❌ Docker не установлен"
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_docker_images: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_docker')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+# --- ПРОЦЕССЫ ---
+
+async def cmd_zombie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать zombie процессы"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['ps', 'aux'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        lines = result.stdout.strip().split('\n')
+        zombies = [l for l in lines if ' Z ' in l or ' Z+ ' in l]
+        
+        if zombies:
+            message = "🔥 *ZOMBIE ПРОЦЕССЫ*\n\n"
+            message += f"Найдено: {len(zombies)}\n\n```\n"
+            for line in zombies[:10]:
+                parts = line.split()
+                if len(parts) >= 11:
+                    pid = parts[1]
+                    cmd = ' '.join(parts[10:])[:30]
+                    message += f"PID {pid}: {cmd}\n"
+            message += "```"
+        else:
+            message = "🔥 *ZOMBIE ПРОЦЕССЫ*\n\n✅ Нет zombie процессов"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_zombie: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_diagnostics')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_threads(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать количество потоков по процессам"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['ps', '-eo', 'nlwp,pid,comm', '--sort=-nlwp'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        lines = result.stdout.strip().split('\n')
+        
+        message = "🧵 *ПОТОКИ ПО ПРОЦЕССАМ*\n\n```\n"
+        message += "THREADS  PID    COMMAND\n"
+        message += "-" * 30 + "\n"
+        
+        for line in lines[1:12]:  # Топ 11, пропуская заголовок
+            parts = line.split()
+            if len(parts) >= 3:
+                threads = parts[0]
+                pid = parts[1]
+                cmd = parts[2][:15]
+                message += f"{threads:>7}  {pid:<6} {cmd}\n"
+        
+        message += "```"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_threads: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_diagnostics')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+# --- СИСТЕМА ---
+
+async def cmd_apt_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать историю apt"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        log_file = '/var/log/apt/history.log'
+        log_file_gz = '/var/log/apt/history.log.1.gz'
+        output = ""
+
+        # Сначала пробуем текущий лог
+        if os.path.exists(log_file) and os.path.getsize(log_file) > 0:
+            result = subprocess.run(
+                ['tail', '-50', log_file],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            output = result.stdout.strip()
+
+        # Если пусто — читаем архив
+        if not output and os.path.exists(log_file_gz):
+            result = subprocess.run(
+                ['zcat', log_file_gz],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            lines = result.stdout.strip().split('\n')
+            output = '\n'.join(lines[-50:])
+
+        if output:
+            message = "📦 *APT ИСТОРИЯ*\n\n```\n"
+            lines = output.split('\n')
+            for line in lines[-20:]:
+                message += line[:65] + "\n"
+            message += "```"
+        else:
+            message = "📦 *APT ИСТОРИЯ*\n\n✅ Лог пуст"
+
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_apt_history: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_system')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_apt_cache(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать размер apt кэша"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['du', '-sh', '/var/cache/apt/archives'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        cache_size = result.stdout.strip().split()[0] if result.stdout else "N/A"
+        
+        # Количество пакетов в кэше
+        count_result = subprocess.run(
+            ['ls', '-1', '/var/cache/apt/archives/'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        pkg_count = len([l for l in count_result.stdout.split('\n') if l.endswith('.deb')])
+        
+        message = "🧹 *APT КЭША*\n\n"
+        message += f"📦 Размер кэша: *{cache_size}*\n"
+        message += f"📄 Пакетов в кэше: *{pkg_count}*\n\n"
+        message += "_Для очистки выполните:_\n"
+        message += "`apt clean`"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_apt_cache: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_system')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+# ============================================
 # ЗАПУСК БОТА
 # ============================================
 
@@ -2088,6 +3119,7 @@ async def main():
     
     # ===== КОМАНДЫ =====
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("cancel", cancel_command))
     
     # ===== CALLBACK HANDLERS =====
     # Порядок важен: сначала более специфичные паттерны, потом общие
@@ -2139,6 +3171,46 @@ async def main():
     
     # Навигация
     app.add_handler(CallbackQueryHandler(back_to_main, pattern='^back_to_main$'))
+    
+    # Дополнительные команды - навигация по меню
+    app.add_handler(CallbackQueryHandler(show_extra_menu, pattern='^extra_menu$'))
+    app.add_handler(CallbackQueryHandler(show_extra_network, pattern='^extra_network$'))
+    app.add_handler(CallbackQueryHandler(show_extra_security, pattern='^extra_security$'))
+    app.add_handler(CallbackQueryHandler(show_extra_diagnostics, pattern='^extra_diagnostics$'))
+    app.add_handler(CallbackQueryHandler(show_extra_docker, pattern='^extra_docker$'))
+    app.add_handler(CallbackQueryHandler(show_extra_system, pattern='^extra_system$'))
+
+    # Дополнительные команды - реализация
+    app.add_handler(CallbackQueryHandler(cmd_open_ports, pattern='^cmd_open_ports$'))
+    app.add_handler(CallbackQueryHandler(cmd_active_connections, pattern='^cmd_active_connections$'))
+    app.add_handler(CallbackQueryHandler(cmd_ssh_sessions, pattern='^cmd_ssh_sessions$'))
+    app.add_handler(CallbackQueryHandler(cmd_uptime, pattern='^cmd_uptime$'))
+    app.add_handler(CallbackQueryHandler(cmd_systemd_failed, pattern='^cmd_systemd_failed$'))
+    app.add_handler(CallbackQueryHandler(cmd_traceroute, pattern='^cmd_traceroute$'))
+
+    # Дополнительные команды - безопасность
+    app.add_handler(CallbackQueryHandler(cmd_last_logins, pattern='^cmd_last_logins$'))
+    app.add_handler(CallbackQueryHandler(cmd_sudo_logs, pattern='^cmd_sudo_logs$'))
+    app.add_handler(CallbackQueryHandler(cmd_ssh_sessions_sec, pattern='^cmd_ssh_sessions_sec$'))
+
+    # Дополнительные команды - диагностика
+    app.add_handler(CallbackQueryHandler(cmd_top_cpu, pattern='^cmd_top_cpu$'))
+    app.add_handler(CallbackQueryHandler(cmd_top_ram, pattern='^cmd_top_ram$'))
+    app.add_handler(CallbackQueryHandler(cmd_big_files, pattern='^cmd_big_files$'))
+    app.add_handler(CallbackQueryHandler(cmd_io_wait, pattern='^cmd_io_wait$'))
+    app.add_handler(CallbackQueryHandler(cmd_test_dns, pattern='^cmd_test_dns$'))
+
+    # Дополнительные команды - Docker
+    app.add_handler(CallbackQueryHandler(cmd_docker_stats, pattern='^cmd_docker_stats$'))
+    app.add_handler(CallbackQueryHandler(cmd_docker_images, pattern='^cmd_docker_images$'))
+    
+    # Дополнительные команды - Процессы
+    app.add_handler(CallbackQueryHandler(cmd_zombie, pattern='^cmd_zombie$'))
+    app.add_handler(CallbackQueryHandler(cmd_threads, pattern='^cmd_threads$'))
+
+    # Дополнительные команды - Система
+    app.add_handler(CallbackQueryHandler(cmd_apt_history, pattern='^cmd_apt_history$'))
+    app.add_handler(CallbackQueryHandler(cmd_apt_cache, pattern='^cmd_apt_cache$'))
     
     # ===== ОБРАБОТЧИК ТЕКСТА =====
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))

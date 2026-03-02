@@ -1,0 +1,6 @@
+check program xray with path "/bin/sh -c 'docker ps --format \"{{.Names}}\" | grep -q amnezia-xray'"
+    start program = "/usr/bin/docker start amnezia-xray"
+    stop program = "/usr/bin/docker stop amnezia-xray"
+    if status != 0 for 2 cycles then exec "/usr/local/bin/monit-alert.sh '⚠️ Xray контейнер остановлен!'"
+    if status == 0 for 2 cycles then exec "/usr/local/bin/monit-alert.sh '✅ Xray контейнер восстановлен и работает!'"
+    if 3 restarts within 5 cycles then exec "/usr/local/bin/monit-alert.sh '🚨 Xray: слишком много перезапусков!'"
