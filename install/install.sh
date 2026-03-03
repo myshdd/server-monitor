@@ -166,6 +166,11 @@ setup_venv() {
         "$bots_dir/monitor_venv/bin/pip" install -r "$bots_dir/monitor_requirements.txt" -q
     fi
     
+
+    # Установка прав на скрипты ботов
+    chmod 644 "$bots_dir/admin_bot.py"
+    chmod 644 "$bots_dir/monitor.py"
+    log_info "Права на файлы ботов установлены"
     log_success "Виртуальные окружения готовы"
 }
 
