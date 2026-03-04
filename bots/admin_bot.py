@@ -776,6 +776,11 @@ async def show_docker_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except subprocess.TimeoutExpired:
         await query.edit_message_text("❌ Таймаут при получении списка контейнеров")
+    except FileNotFoundError:
+        await query.edit_message_text(
+            "ℹ️ Docker не установлен на этом сервере",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]])
+        )
     except Exception as e:
         logger.error(f"Ошибка получения списка Docker: {e}")
         await query.edit_message_text(f"❌ Ошибка: {str(e)}")
@@ -828,6 +833,11 @@ async def docker_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=reply_markup
         )
         
+    except FileNotFoundError:
+        await query.edit_message_text(
+            "ℹ️ Docker не установлен на этом сервере",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]])
+        )
     except Exception as e:
         logger.error(f"Ошибка управления контейнером {container}: {e}")
         await query.edit_message_text(f"❌ Ошибка: {str(e)}")
@@ -908,6 +918,11 @@ async def docker_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except subprocess.TimeoutExpired:
         await query.edit_message_text(f"❌ Таймаут при выполнении {action}")
+    except FileNotFoundError:
+        await query.edit_message_text(
+            "ℹ️ Docker не установлен на этом сервере",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]])
+        )
     except Exception as e:
         logger.error(f"Ошибка Docker {action} для {container}: {e}")
         await query.edit_message_text(f"❌ Ошибка: {str(e)}")
@@ -949,12 +964,17 @@ async def show_sysinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             timeout=5
         ).stdout.strip()
         
-        docker_version = subprocess.run(
-            ['docker', '--version'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        ).stdout.strip()
+        try:
+            docker_version = subprocess.run(
+                ['docker', '--version'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            ).stdout.strip()
+            if not docker_version:
+                docker_version = "не установлен"
+        except FileNotFoundError:
+            docker_version = "не установлен"
         
         # Сетевые настройки
         net_info = "\n🌐 *Сетевые настройки:*\n"
@@ -2086,12 +2106,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         
         return
-    
-    # Если нет активного ожидания ввода — показываем меню
-    await update.message.reply_text(
-        "🤖 Используйте кнопки меню или команду /start",
-        reply_markup=main_menu_keyboard()
-    )
 
 # ============================================
 # НАВИГАЦИЯ
