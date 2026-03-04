@@ -46,8 +46,9 @@
 
 ## Требования
 - **Ubuntu 24.04 LTS** (или новее)
+- **systemd**
 - **Root доступ**
-- **Telegram Bot Token** (получить у [@BotFather](https://t.me/botfather))
+- **Telegram Bot Token** (получить у [@BotFather](https://t.me/botfather)) и чат ID
 
 ## Установка
 
@@ -55,9 +56,11 @@
 
 ```bash
 # 1. Клонируем репозиторий
+apt install -y git
 cd /opt
 git clone https://github.com/myshdd/server-monitor.git
 cd server-monitor
+chmod +x install/*.sh
 
 # 2. Первичная настройка сервера (локаль, timezone, пользователи)
 ./install/setup-server-init.sh

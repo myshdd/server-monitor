@@ -136,24 +136,27 @@ create_user() {
         fi
     fi
 
-    # Ввод пароля
+    # Ввод пароля с очисткой буфера
     while true; do
+        # Очистка буфера ввода
+        read -t 0.1 -n 10000 discard 2>/dev/null || true
+        
         read -s -p "Введите пароль: " password1
         echo ""
         read -s -p "Повторите пароль: " password2
         echo ""
-
+        
         if [[ "$password1" == "$password2" ]]; then
             if [[ ${#password1} -lt 6 ]]; then
                 log_error "Пароль слишком короткий (минимум 6 символов)"
-            else
-                break
+                continue
             fi
+            break
         else
             log_error "Пароли не совпадают"
+            continue
         fi
     done
-
     # Создаём пользователя
     log_info "Создание пользователя $username_input..."
     useradd -m -s /bin/bash "$username_input"

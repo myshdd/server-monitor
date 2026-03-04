@@ -67,6 +67,7 @@ PACKAGES=(
     "sysstat"
     # Тестирование и диагностика
     "stress-ng"
+    "cron"
     # Python
     "python3-full"
     "python3-venv"

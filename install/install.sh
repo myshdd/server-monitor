@@ -15,7 +15,7 @@ NC='\033[0m' # No Color
 
 # Пути
 INSTALL_DIR="/opt/server-monitor"
-CONFIG_DIR="$HOME/.config/server-monitor"
+CONFIG_DIR="$INSTALL_DIR/config"
 LIB_DIR="/usr/local/lib/server-monitor"
 BIN_DIR="/usr/local/bin"
 DATA_DIR="/opt/server-monitor/data"
@@ -80,8 +80,12 @@ create_symlinks() {
     local scripts_dir="$INSTALL_DIR/scripts"
     local count=0
     
+
+    # Устанавливаем права на выполнение
+    chmod +x "$scripts_dir"/*/*.sh "$scripts_dir"/*/*.py 2>/dev/null || true
     # Проходим по всем поддиректориям scripts
     for category in fail2ban network system geoip; do
+
         if [[ -d "$scripts_dir/$category" ]]; then
             for script in "$scripts_dir/$category"/*.sh "$scripts_dir/$category"/*.py; do
                 if [[ -f "$script" ]]; then
@@ -94,7 +98,7 @@ create_symlinks() {
                     fi
                     
                     ln -s "$script" "$link_path"
-                    ((count++))
+                    count=$((count + 1))
                 fi
             done
         fi
@@ -287,13 +291,20 @@ main() {
     setup_cron
     
     echo ""
+
+    # Запуск сервисов
+    log_info "Запуск сервисов..."
+    systemctl daemon-reload
+    systemctl enable --now telegram-admin-bot 2>/dev/null || true
+    systemctl enable --now telegram-monitor 2>/dev/null || true
+    log_success "Сервисы запущены"
     echo "=========================================="
     echo "  Установка завершена!"
     echo "=========================================="
     echo ""
-    echo "Для запуска сервисов выполните:"
-    echo "  systemctl enable --now telegram-admin-bot"
-    echo "  systemctl enable --now telegram-monitor"
+    echo "Сервисы запущены. Для перезапуска:"
+    echo "  systemctl restart telegram-admin-bot"
+    echo "  systemctl restart telegram-monitor"
     echo ""
     echo "Для проверки статуса:"
     echo "  systemctl status telegram-admin-bot"
