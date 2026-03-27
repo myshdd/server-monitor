@@ -26,6 +26,17 @@ except ConfigError as e:
     print(f"❌ Ошибка конфигурации: {e}", file=sys.stderr)
     sys.exit(1)
 
+
+# ============================================
+# УТИЛИТЫ ДЛЯ ЭКРАНИРОВАНИЯ MARKDOWN
+# ============================================
+
+def escape_markdown(text: str) -> str:
+    """Экранирует спецсимволы Markdown v1"""
+    special_chars = r"_*[`"
+    for char in special_chars:
+        text = text.replace(char, f"\\{char}")
+    return text
 # ============================================
 # УТИЛИТЫ ДЛЯ РАБОТЫ С СЕТЬЮ
 # ============================================
@@ -766,7 +777,7 @@ async def show_docker_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 image = parts[2] if len(parts) > 2 else "unknown"
                 
                 status_emoji = "✅" if "Up" in status else "⏹"
-                message += f"{status_emoji} `{name}` ({image})\n"
+                message += f"{status_emoji} `{escape_markdown(name)}` ({escape_markdown(image)})\n"
                 keyboard.append([InlineKeyboardButton(f"{status_emoji} {name}", callback_data=f'docker_{name}')])
         
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')])
@@ -826,7 +837,7 @@ async def docker_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status_emoji = "✅" if status == "running" else "⏹" if status == "exited" else "❓"
         
         await query.edit_message_text(
-            f"🐳 *Управление контейнером:* `{container}`\n\n"
+            f"🐳 *Управление контейнером:* `{escape_markdown(container)}`\n\n"
             f"Статус: {status_emoji} {status}\n\n"
             f"Выберите действие:",
             parse_mode='Markdown',
@@ -869,7 +880,7 @@ async def docker_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=True,
                 timeout=30
             )
-            message = f"✅ Контейнер `{container}` запущен" if result.returncode == 0 else f"❌ Ошибка: {result.stderr}"
+            message = f"✅ Контейнер `{escape_markdown(container)}` запущен" if result.returncode == 0 else f"❌ Ошибка: {result.stderr}"
             
         elif action == 'stop':
             result = subprocess.run(
@@ -878,7 +889,7 @@ async def docker_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=True,
                 timeout=30
             )
-            message = f"✅ Контейнер `{container}` остановлен" if result.returncode == 0 else f"❌ Ошибка: {result.stderr}"
+            message = f"✅ Контейнер `{escape_markdown(container)}` остановлен" if result.returncode == 0 else f"❌ Ошибка: {result.stderr}"
             
         elif action == 'restart':
             result = subprocess.run(
@@ -887,7 +898,7 @@ async def docker_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=True,
                 timeout=60
             )
-            message = f"✅ Контейнер `{container}` перезапущен" if result.returncode == 0 else f"❌ Ошибка: {result.stderr}"
+            message = f"✅ Контейнер `{escape_markdown(container)}` перезапущен" if result.returncode == 0 else f"❌ Ошибка: {result.stderr}"
             
         elif action == 'logs':
             result = subprocess.run(
@@ -901,7 +912,7 @@ async def docker_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logs = logs[-2000:] if len(logs) > 2000 else logs
             logs = logs.replace('`', "'")
             
-            message = f"📊 *Логи контейнера* `{container}`:\n\n```\n{logs}\n```"
+            message = f"📊 *Логи контейнера* `{escape_markdown(container)}`:\n\n```\n{logs}\n```"
             
             keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data=f'docker_{container}')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
