@@ -319,9 +319,73 @@ TOKEN=$(get_secret "telegram.admin_bot_token")
 - ✅ Whitelist для своих IP и DDNS доменов
 - ✅ Monit контролирует работу сервисов
 
+## Оптимизация производительности
+
+### ipset для fail2ban
+
+Fail2ban использует **ipset** для хранения забаненных IP вместо отдельных правил iptables. Это даёт:
+
+- ✅ **O(1) lookup** вместо O(n) — проверка IP в хэш-таблице
+- ✅ **Поддержка тысяч IP** без нагрузки на CPU
+- ✅ **Снижение нагрузки в 100+ раз** при большом количестве атак
+
+**Было (без ipset):**
+
+iptables: 174 отдельных правила для каждого IP
+CPU: высокая нагрузка при каждом пакете
+Load average: 3-15+ при атаках
+
+text
+
+
+**Стало (с ipset):**
+
+iptables: 3 правила (по одному на jail)
+ipset: все IP в хэш-таблицах
+Load average: ~1.5 даже при 1000+ забаненных IP
+
+text
+
+
+Проверка состояния ipset:
+```bash
+# Количество IP в ipset'ах
+ipset list f2b-SSH-slow | grep "Number of entries"
+ipset list f2b-SSH-very-slow | grep "Number of entries"
+ipset list f2b-SSH-ultra-slow | grep "Number of entries"
+
+# Правила iptables с ipset
+iptables -L INPUT -n -v | grep "match-set"
+
+Анализатор медленных атак
+
+Скрипт f2b-slow-attack-detector.py запускается каждые 6 часов для снижения нагрузки. Он анализирует паттерны распределённых SSH-атак:
+
+    Один логин с множества IP (распределённая атака)
+    Один IP пробует множество логинов (credential stuffing)
+    Подозрительные подсети (/24)
+
+Настройка в /etc/cron.d/f2b-analysis:
+
+Bash
+
+# Запуск в 00:30, 06:30, 12:30, 18:30
+30 */6 * * * root /usr/bin/python3 /usr/local/bin/f2b-slow-attack-detector.py --auto-ban
+
+Ручной запуск анализа:
+
+Bash
+
+/usr/bin/python3 /usr/local/bin/f2b-slow-attack-detector.py
+# С автоматическим баном:
+/usr/bin/python3 /usr/local/bin/f2b-slow-attack-detector.py --auto-ban
+
+
+#
+
 ## Устранение проблем
 
-### Боты не запускаются
+## Боты не запускаются
 
 ```bash
 # Проверьте логи

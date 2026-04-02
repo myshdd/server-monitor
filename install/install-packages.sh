@@ -49,6 +49,8 @@ PACKAGES=(
     "socat"
     "traceroute"
     "dnsutils"
+    "ldnsutils"           # drill (DNS lookup утилита)
+    "speedtest-cli"       # Speedtest Ookla
     # Утилиты
     "curl"
     "wget"
@@ -76,6 +78,16 @@ PACKAGES=(
     "sqlite3"
 )
 
+# Опциональные пакеты (раскомментируйте при необходимости)
+OPTIONAL_PACKAGES=(
+#     "docker.io"          # Docker контейнеризация
+      "docker-compose"     # Docker Compose
+#     "certbot"            # Let's Encrypt SSL сертификаты
+#     "nginx"              # Nginx веб-сервер
+#     "ufw"                # Uncomplicated Firewall
+#     "nmap"               # Сканер портов и сети
+)
+
 # Установка пакетов
 log_info "Установка пакетов..."
 for pkg in "${PACKAGES[@]}"; do
@@ -83,10 +95,25 @@ for pkg in "${PACKAGES[@]}"; do
         log_success "$pkg уже установлен"
     else
         log_info "Установка $pkg..."
-        apt-get install -y -qq "$pkg"
-        log_success "$pkg установлен"
+        apt-get install -y -qq "$pkg" 2>/dev/null || {
+            log_warning "$pkg не удалось установить (возможно недоступен в репозиториях)"
+        }
     fi
 done
+
+# Установка опциональных пакетов (если раскомментированы)
+if [ -n "${OPTIONAL_PACKAGES}" ]; then
+ log_info "Установка опциональных пакетов..."
+ for pkg in "${OPTIONAL_PACKAGES[@]}"; do
+     if dpkg -l | grep -q "^ii.*$pkg "; then
+         log_success "$pkg уже установлен"
+     else
+         log_info "Установка $pkg..."
+         apt-get install -y -qq "$pkg"
+         log_success "$pkg установлен"
+     fi
+ done
+fi
 
 echo ""
 log_success "Все пакеты установлены"
@@ -98,6 +125,13 @@ echo "  Python: $(python3 --version 2>&1 | cut -d' ' -f2)"
 echo "  fail2ban: $(fail2ban-client --version 2>&1 | head -1)"
 echo "  iperf3: $(iperf3 --version 2>&1 | head -1 | awk '{print $2}')"
 echo "  monit: $(monit --version 2>&1 | head -1 | awk '{print $2}')"
+echo "  ipset: $(ipset --version 2>&1 | head -1)"
+if command -v speedtest &>/dev/null; then
+    echo "  speedtest: $(speedtest --version 2>&1 | head -1)"
+fi
+if command -v docker &>/dev/null; then
+    echo "  docker: $(docker --version 2>&1 | cut -d' ' -f3 | tr -d ',')"
+fi
 echo ""
 
 log_success "Установка завершена"

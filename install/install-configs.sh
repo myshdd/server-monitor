@@ -69,7 +69,28 @@ install_fail2ban_configs() {
     cp "$CONFIG_SRC/fail2ban/scripts/fail2ban-telegram.sh" /etc/fail2ban/scripts/
     chmod +x /etc/fail2ban/scripts/fail2ban-telegram.sh
 
+    # Копируем cron задачи для fail2ban
+    if [[ -d "$CONFIG_SRC/fail2ban/cron.d" ]]; then
+        cp "$CONFIG_SRC/fail2ban/cron.d/"* /etc/cron.d/
+        log_info "Cron задачи fail2ban установлены"
+    fi
+
     log_success "Конфиги fail2ban установлены"
+}
+
+#-------------------------------------------------------------------------------
+# ipset (зависимость для fail2ban с ipset)
+#-------------------------------------------------------------------------------
+install_ipset() {
+    log_info "Проверка ipset..."
+    
+    if ! command -v ipset &> /dev/null; then
+        log_info "Установка ipset..."
+        apt-get install -y ipset > /dev/null 2>&1
+        log_success "ipset установлен"
+    else
+        log_success "ipset уже установлен"
+    fi
 }
 
 #-------------------------------------------------------------------------------
@@ -146,6 +167,7 @@ main() {
         exit 1
     fi
 
+    install_ipset
     install_fail2ban_configs
     install_iperf3_configs
     install_monit_configs

@@ -1,0 +1,4 @@
+# Анализ медленных/распределённых SSH атак
+# Запуск каждые 6 часов (00:30, 06:30, 12:30, 18:30)
+# Использует меньше ресурсов чем ежечасный запуск
+30 */6 * * * root /usr/bin/python3 /usr/local/bin/f2b-slow-attack-detector.py --auto-ban >> /var/log/f2b-analysis.log 2>&1
