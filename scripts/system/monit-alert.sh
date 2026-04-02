@@ -195,7 +195,7 @@ fi
 # ОТПРАВКА СООБЩЕНИЯ
 # ============================================
 
-response=$(curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_MONITOR_TOKEN}/sendMessage" \
+response=$(timeout 10 curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_MONITOR_TOKEN}/sendMessage" \
     -d "chat_id=${TELEGRAM_CHAT_ID}" \
     -d "text=${MESSAGE}")
 

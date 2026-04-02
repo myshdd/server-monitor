@@ -1,0 +1,5 @@
+# Ежедневный отчет в 8:00
+0 8 * * * root /usr/local/bin/f2b-daily-report.sh
+
+# Проверка аномалий каждые 15 минут со сдвигом на 3 минуты (03, 18, 33, 48)
+3-58/15 * * * * root /usr/local/bin/f2b-anomaly-alert.sh

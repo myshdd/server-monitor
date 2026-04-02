@@ -109,3 +109,6 @@ fi
 echo "$(date +%Y-%m-%d_%H:%M:%S): 15min=$ATTACKS_15MIN, 1h=$ATTACKS_1H, unique=$UNIQUE_IPS" >> "$LOG_FILE"
 
 log_info "Проверка аномалий завершена: 15min=$ATTACKS_15MIN, 1h=$ATTACKS_1H, unique=$UNIQUE_IPS"
+
+# Ждём завершения фоновых процессов
+wait

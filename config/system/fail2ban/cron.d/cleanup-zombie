@@ -1,0 +1,2 @@
+# Очистка zombie процессов каждые 5 минут
+*/5 * * * * root ps aux | awk '$8=="Z" {print $3}' | xargs -r kill -HUP 2>/dev/null || true
