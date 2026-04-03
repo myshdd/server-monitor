@@ -69,12 +69,6 @@ install_fail2ban_configs() {
     cp "$CONFIG_SRC/fail2ban/scripts/fail2ban-telegram.sh" /etc/fail2ban/scripts/
     chmod +x /etc/fail2ban/scripts/fail2ban-telegram.sh
 
-    # Копируем cron задачи для fail2ban
-    if [[ -d "$CONFIG_SRC/fail2ban/cron.d" ]]; then
-        cp "$CONFIG_SRC/fail2ban/cron.d/"* /etc/cron.d/
-        log_info "Cron задачи fail2ban установлены"
-    fi
-
     log_success "Конфиги fail2ban установлены"
 }
 
@@ -200,16 +194,3 @@ main() {
 }
 
 main "$@"
-
-#-------------------------------------------------------------------------------
-# Cron задачи
-#-------------------------------------------------------------------------------
-    log_info "Установка cron задач..."
-
-    if [[ -d "$CONFIG_SRC/cron.d" ]]; then
-        cp "$CONFIG_SRC/cron.d/"* /etc/cron.d/
-        log_success "Cron задачи установлены"
-    else
-        log_warning "Директория cron.d не найдена в конфиге"
-    fi
-}

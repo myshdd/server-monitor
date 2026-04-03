@@ -1,0 +1,2 @@
+# Автоматическая очистка диска каждое воскресенье в 3:00
+0 3 * * 0 root /opt/server-monitor/scripts/maintenance/cleanup-disk.sh >> /var/log/cleanup-disk.log 2>&1

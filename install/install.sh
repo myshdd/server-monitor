@@ -244,7 +244,11 @@ setup_cron() {
 @reboot $BIN_DIR/collect-network-stats.sh force-save > /dev/null 2>&1
 
 # Сохранение дневной статистики в 23:59
+
 59 23 * * * $BIN_DIR/collect-network-stats.sh force-save > /dev/null 2>&1
+
+# Автоматическая очистка диска каждое воскресенье в 3:30
+30 3 * * 0 /opt/server-monitor/scripts/maintenance/cleanup-disk.sh >> /var/log/cleanup-disk.log 2>&1
 CRONEOF
 
     # Показываем что будет установлено
