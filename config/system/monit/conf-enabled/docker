@@ -1,6 +1,6 @@
 check process docker with pidfile /var/run/docker.pid
     start program = "/usr/bin/systemctl start docker"
     stop program = "/usr/bin/systemctl stop docker"
-    if not exist for 2 cycles then exec "/usr/local/bin/monit-alert.sh '⚠️ Docker сервис упал! Контейнеры остановятся.'"
-    if exist for 2 cycles then exec "/usr/local/bin/monit-alert.sh '✅ Docker сервис восстановлен!'"
-    if 3 restarts within 5 cycles then exec "/usr/local/bin/monit-alert.sh '🚨 Docker часто перезапускается! Проверьте Docker.'"
+    if not exist for 2 cycles then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '⚠️ Docker сервис упал! Контейнеры остановятся.'"
+    if exist for 2 cycles then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '✅ Docker сервис восстановлен!'"
+    if 3 restarts within 5 cycles then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '🚨 Docker часто перезапускается! Проверьте Docker.'"

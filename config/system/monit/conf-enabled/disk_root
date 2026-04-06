@@ -1,3 +1,5 @@
 check filesystem root with path /
-    if space usage > 80% then exec "/usr/local/bin/monit-alert.sh disk_high"
-    if inode usage > 80% then exec "/usr/local/bin/monit-alert.sh inode_high"
+    if space usage > 80% then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '⚠️ Диск заполнен более чем на 80%!'"
+    if space usage < 75% then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '✅ Место на диске в норме'"
+    if inode usage > 80% then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '⚠️ Inode заполнены более чем на 80%!'"
+    if inode usage < 75% then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '✅ Inode в норме'"

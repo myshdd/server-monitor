@@ -1,5 +1,5 @@
-check program socks5_container with path "/bin/sh -c 'docker ps --format \"{{.Names}}\" | grep -q amnezia-socks5proxy'"
+check program socks5_container with path "/bin/sh -c 'docker ps --format \"{{.Names}}\" | grep -q amnezia-socks5proxy && echo OK'"
     start program = "/usr/bin/docker start amnezia-socks5proxy"
     stop program = "/usr/bin/docker stop amnezia-socks5proxy"
-    if status != 0 for 2 cycles then exec "/usr/local/bin/monit-alert.sh '⚠️ SOCKS5 прокси остановлен!'"
-    if status == 0 for 2 cycles then exec "/usr/local/bin/monit-alert.sh '✅ SOCKS5 прокси восстановлен!'"
+    if status != 0 for 2 cycles then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '⚠️ SOCKS5 прокси остановлен!'"
+    if status == 0 for 2 cycles then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '✅ SOCKS5 прокси восстановлен!'"

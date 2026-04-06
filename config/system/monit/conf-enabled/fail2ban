@@ -1,6 +1,6 @@
 check process fail2ban with pidfile /var/run/fail2ban/fail2ban.pid
     start program = "/usr/bin/systemctl start fail2ban"
     stop program = "/usr/bin/systemctl stop fail2ban"
-    if not exist for 2 cycles then exec "/usr/local/bin/monit-alert.sh '⚠️ Fail2ban сервис упал! Защита SSH отключена.'"
-    if exist for 2 cycles then exec "/usr/local/bin/monit-alert.sh '✅ Fail2ban сервис восстановлен!'"
-    if 3 restarts within 5 cycles then exec "/usr/local/bin/monit-alert.sh '🚨 Fail2ban часто перезапускается! Проверьте конфиги.'"
+    if not exist for 2 cycles then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '⚠️ Fail2ban сервис упал! Защита SSH отключена.'"
+    if exist for 2 cycles then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '✅ Fail2ban сервис восстановлен!'"
+    if 3 restarts within 5 cycles then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '🚨 Fail2ban часто перезапускается! Проверьте конфиги.'"

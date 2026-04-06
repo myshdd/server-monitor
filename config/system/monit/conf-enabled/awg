@@ -1,5 +1,5 @@
-check program awg with path "/bin/sh -c 'docker ps --format \"{{.Names}}\" | grep -q amnezia-awg'"
+check program awg with path "/bin/sh -c 'docker ps --format \"{{.Names}}\" | grep -q amnezia-awg && echo OK'"
     start program = "/usr/bin/docker start amnezia-awg"
     stop program = "/usr/bin/docker stop amnezia-awg"
-    if status != 0 for 2 cycles then exec "/usr/local/bin/monit-alert.sh '⚠️ Amnezia-AWG контейнер остановлен!'"
-    if status == 0 for 2 cycles then exec "/usr/local/bin/monit-alert.sh '✅ Amnezia-AWG контейнер восстановлен!'"
+    if status != 0 for 2 cycles then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '⚠️ Amnezia-AWG контейнер остановлен!'"
+    if status == 0 for 2 cycles then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '✅ Amnezia-AWG контейнер восстановлен!'"

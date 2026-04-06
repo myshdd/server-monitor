@@ -1,17 +1,17 @@
 check system wg
     # CPU load - только при реальных проблемах
-    if loadavg (1min) > 4 then exec "/usr/local/bin/monit-alert.sh load1_high"
-    if loadavg (5min) > 3 then exec "/usr/local/bin/monit-alert.sh load5_high"
-    if loadavg (15min) > 2.5 then exec "/usr/local/bin/monit-alert.sh load15_high"
+    if loadavg (1min) > 4 then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '⚠️ Высокая нагрузка CPU (1мин)'"
+    if loadavg (5min) > 3 then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '⚠️ Высокая нагрузка CPU (5мин)'"
+    if loadavg (15min) > 2.5 then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '⚠️ Высокая нагрузка CPU (15мин)'"
 
-    # Восстановление - только когда нагрузка упала значительно
-    if loadavg (1min) < 2 then exec "/usr/local/bin/monit-alert.sh load1_ok"
-    if loadavg (5min) < 1.5 then exec "/usr/local/bin/monit-alert.sh load5_ok"
+    # Восстановление
+    if loadavg (1min) < 2 then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '✅ Нагрузка CPU (1мин) в норме'"
+    if loadavg (5min) < 1.5 then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '✅ Нагрузка CPU (5мин) в норме'"
 
     # Память
-    if memory usage > 85% then exec "/usr/local/bin/monit-alert.sh memory_high"
-    if memory usage < 75% then exec "/usr/local/bin/monit-alert.sh memory_ok"
+    if memory usage > 85% then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '⚠️ Заканчивается память'"
+    if memory usage < 75% then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '✅ Память в норме'"
 
     # SWAP
-    if swap usage > 20% then exec "/usr/local/bin/monit-alert.sh swap_high"
-    if swap usage < 15% then exec "/usr/local/bin/monit-alert.sh swap_ok"
+    if swap usage > 20% then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '⚠️ SWAP заполнен'"
+    if swap usage < 15% then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '✅ SWAP в норме'"

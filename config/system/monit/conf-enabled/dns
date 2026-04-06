@@ -1,5 +1,5 @@
-check program dns with path "/bin/sh -c 'docker ps --format \"{{.Names}}\" | grep -q amnezia-dns'"
+check program dns with path "/bin/sh -c 'docker ps --format \"{{.Names}}\" | grep -q amnezia-dns && echo OK'"
     start program = "/usr/bin/docker start amnezia-dns"
     stop program = "/usr/bin/docker stop amnezia-dns"
-    if status != 0 for 2 cycles then exec "/usr/local/bin/monit-alert.sh '⚠️ DNS контейнер остановлен!'"
-    if status == 0 for 2 cycles then exec "/usr/local/bin/monit-alert.sh '✅ DNS контейнер восстановлен!'"
+    if status != 0 for 2 cycles then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '⚠️ DNS контейнер остановлен!'"
+    if status == 0 for 2 cycles then exec "/opt/server-monitor/scripts/system/monit-telegram-direct.py '✅ DNS контейнер восстановлен!'"
