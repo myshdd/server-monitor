@@ -152,7 +152,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     context.user_data.pop("pending_power_action", None)
     context.user_data.pop("pending_package_action", None)
-    await update.message.reply_text("🤖 *Admin Bot v2*", reply_markup=main_menu_keyboard(), parse_mode='Markdown')
+    context.user_data.pop("pending_docker_action", None)
+    await update.message.reply_text("🤖 *Admin Bot v3*", reply_markup=main_menu_keyboard(), parse_mode='Markdown')
 
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать полную статистику сервера"""
@@ -924,6 +925,47 @@ def is_valid_docker_container_name(name: str) -> bool:
     )
 
 
+
+def _create_docker_confirmation(
+    user_data, action, container, chat_id, message_id
+):
+    """Создаёт разрешение на одну Docker-операцию сроком 60 секунд."""
+    import time
+
+    if action not in ("start", "stop", "restart"):
+        raise ValueError("Invalid Docker action")
+
+    if not is_valid_docker_container_name(container):
+        raise ValueError("Invalid Docker container")
+
+    user_data["pending_docker_action"] = {
+        "action": action,
+        "container": container,
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "expires_at": time.monotonic() + 60,
+    }
+
+
+def _consume_docker_confirmation(
+    user_data, action, container, chat_id, message_id
+):
+    """Проверяет и однократно использует разрешение Docker."""
+    import time
+
+    pending = user_data.pop("pending_docker_action", None)
+
+    return (
+        isinstance(pending, dict)
+        and pending.get("action") == action
+        and pending.get("container") == container
+        and pending.get("chat_id") == chat_id
+        and pending.get("message_id") == message_id
+        and isinstance(pending.get("expires_at"), (int, float))
+        and time.monotonic() <= pending["expires_at"]
+    )
+
+
 async def show_docker_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Отображает список всех Docker контейнеров.
@@ -943,8 +985,8 @@ async def show_docker_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if result.returncode != 0:
             logger.error(
-                "docker ps failed: %s",
-                result.stderr.strip()
+                "docker ps failed, exit=%s",
+                result.returncode
             )
             await query.edit_message_text(
                 "❌ Не удалось получить список Docker-контейнеров"
@@ -985,8 +1027,8 @@ async def show_docker_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]])
         )
     except Exception as e:
-        logger.error(f"Ошибка получения списка Docker: {e}")
-        await query.edit_message_text(f"❌ Ошибка: {str(e)}")
+        logger.error("Docker list exception: %s", type(e).__name__)
+        await query.edit_message_text("❌ Ошибка получения списка Docker-контейнеров")
 
 
 async def docker_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1060,141 +1102,309 @@ async def docker_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]])
         )
     except Exception as e:
-        logger.error(f"Ошибка управления контейнером {container}: {e}")
-        await query.edit_message_text(f"❌ Ошибка: {str(e)}")
+        logger.error("Docker inspect exception: container=%s, type=%s", container, type(e).__name__)
+        await query.edit_message_text("❌ Ошибка получения состояния Docker-контейнера")
 
 
-async def docker_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Выполняет действие над Docker контейнером.
-    Поддерживаемые действия: start, stop, restart, logs.
-    Формат callback_data: docker_{action}_{container}
-    """
+
+async def request_docker_action(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+):
+    """Запрашивает одноразовое подтверждение операции Docker."""
     query = update.callback_query
     await query.answer()
-    
-    # Парсим действие и имя контейнера
-    parts = query.data.split('_', 2)
-    if len(parts) < 3:
-        await query.edit_message_text("❌ Ошибка: неверный формат данных")
+
+    # Предыдущий запрос становится недействительным.
+    context.user_data.pop("pending_docker_action", None)
+
+    parts = query.data.split("_", 2)
+
+    if len(parts) != 3:
+        await query.edit_message_text(
+            "❌ Некорректный запрос Docker"
+        )
         return
-    
-    action = parts[1]
-    container = parts[2]
+
+    action, container = parts[1], parts[2]
+
+    if (
+        action not in ("start", "stop", "restart")
+        or not is_valid_docker_container_name(container)
+    ):
+        await query.edit_message_text(
+            "❌ Недопустимая операция Docker"
+        )
+        return
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            "✅ Подтвердить",
+            callback_data="docker_confirm"
+        )],
+        [InlineKeyboardButton(
+            "❌ Отмена",
+            callback_data="docker_cancel"
+        )],
+    ])
+
+    # Разрешение появляется только после успешного
+    # отображения предупреждения в Telegram.
+    await query.edit_message_text(
+        f"⚠️ Подтвердите операцию Docker:\n\n"
+        f"Действие: {action}\n"
+        f"Контейнер: {container}\n\n"
+        "Подтверждение действительно 60 секунд.",
+        reply_markup=keyboard,
+    )
+
+    _create_docker_confirmation(
+        context.user_data,
+        action,
+        container,
+        query.message.chat.id,
+        query.message.message_id,
+    )
+
+
+
+# DOCKER-01: блокировка только управляющих операций Docker.
+import threading as _docker_threading
+
+_DOCKER_OPERATION_LOCK = _docker_threading.Lock()
+
+
+def _run_docker_change(action, container):
+    """Запускает Docker в рабочем потоке с эксклюзивной блокировкой."""
+    if action not in ("start", "stop", "restart"):
+        raise ValueError("Invalid Docker action")
+
+    if not is_valid_docker_container_name(container):
+        raise ValueError("Invalid Docker container")
+
+    if not _DOCKER_OPERATION_LOCK.acquire(blocking=False):
+        return None
+
+    try:
+        return subprocess.run(
+            ["docker", action, container],
+            capture_output=True,
+            text=True,
+            timeout=60 if action == "restart" else 30,
+        )
+    finally:
+        _DOCKER_OPERATION_LOCK.release()
+
+
+async def confirm_docker_action(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+):
+    """Подтверждает, отменяет или выполняет одну операцию Docker."""
+    query = update.callback_query
+    await query.answer()
+
+    pending = context.user_data.get("pending_docker_action")
+
+    same_message = (
+        isinstance(pending, dict)
+        and query.message is not None
+        and pending.get("chat_id") == query.message.chat.id
+        and pending.get("message_id") == query.message.message_id
+    )
+
+    if query.data == "docker_cancel":
+        if same_message:
+            context.user_data.pop("pending_docker_action", None)
+
+        await query.edit_message_text(
+            "❌ Операция Docker отменена"
+            if same_message else
+            "❌ Подтверждение отсутствует или недействительно."
+        )
+        return
+
+    if query.data != "docker_confirm":
+        await query.edit_message_text(
+            "❌ Недопустимая операция Docker"
+        )
+        return
+
+    # Старое сообщение не должно аннулировать новый запрос.
+    if not same_message:
+        await query.edit_message_text(
+            "❌ Подтверждение отсутствует или недействительно."
+        )
+        return
+
+    action = pending.get("action")
+    container = pending.get("container")
+
+    valid = _consume_docker_confirmation(
+        context.user_data,
+        action,
+        container,
+        query.message.chat.id,
+        query.message.message_id,
+    )
+
+    if not valid:
+        await query.edit_message_text(
+            "❌ Подтверждение истекло или уже использовано."
+        )
+        return
+
+    # Разрешение уже удалено. При ошибке Telegram
+    # команда не запускается.
+    await query.edit_message_text(
+        f"🔄 Выполняется Docker {action}: {container}"
+    )
+
+    try:
+        result = await asyncio.to_thread(
+            _run_docker_change, action, container
+        )
+
+        if result is None:
+            logger.warning(
+                "DOCKER-01: busy, action=%s, container=%s",
+                action, container,
+            )
+            message = "⚠️ Другая операция Docker уже выполняется."
+
+        elif result.returncode == 0:
+            logger.info(
+                "DOCKER-01: success, action=%s, container=%s",
+                action, container,
+            )
+            message = f"✅ Docker {action}: {container}"
+
+        else:
+            logger.warning(
+                "DOCKER-01: failed, action=%s, container=%s, exit=%s",
+                action, container, result.returncode,
+            )
+            message = "❌ Команда Docker завершилась с ошибкой."
+
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "DOCKER-01: timeout, action=%s, container=%s",
+            action, container,
+        )
+        message = (
+            "⚠️ Превышено время ожидания Docker. "
+            "Проверьте фактическое состояние контейнера."
+        )
+
+    except Exception as exc:
+        logger.error(
+            "DOCKER-01: exception, action=%s, container=%s, type=%s",
+            action, container, type(exc).__name__,
+        )
+        message = "❌ Ошибка выполнения команды Docker."
+
+    try:
+        await query.edit_message_text(
+            message,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "🔙 К контейнерам",
+                    callback_data="docker_list",
+                )
+            ]]),
+        )
+    except Exception as exc:
+        logger.warning(
+            "DOCKER-01: response error, type=%s",
+            type(exc).__name__,
+        )
+
+
+async def docker_action(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+):
+    """Показывает последние 30 строк журнала Docker-контейнера."""
+    query = update.callback_query
+    await query.answer()
+
+    if not query.data.startswith("docker_logs_"):
+        await query.edit_message_text(
+            "❌ Недопустимая операция Docker"
+        )
+        return
+
+    container = query.data.removeprefix("docker_logs_")
 
     if not is_valid_docker_container_name(container):
         await query.edit_message_text(
             "❌ Некорректное имя Docker-контейнера"
         )
         return
-    
+
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "🔙 Назад",
+            callback_data="docker_list",
+        )
+    ]])
+
     try:
-        if action == 'start':
-            result = subprocess.run(
-                ['docker', 'start', container],
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-            message = f"✅ Контейнер `{escape_markdown(container)}` запущен" if result.returncode == 0 else f"❌ Ошибка: {result.stderr}"
-            
-        elif action == 'stop':
-            result = subprocess.run(
-                ['docker', 'stop', container],
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-            message = f"✅ Контейнер `{escape_markdown(container)}` остановлен" if result.returncode == 0 else f"❌ Ошибка: {result.stderr}"
-            
-        elif action == 'restart':
-            result = subprocess.run(
-                ['docker', 'restart', container],
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-            message = f"✅ Контейнер `{escape_markdown(container)}` перезапущен" if result.returncode == 0 else f"❌ Ошибка: {result.stderr}"
-            
-        elif action == 'logs':
-            result = subprocess.run(
-                ['docker', 'logs', '--tail', '30', container],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            if result.returncode != 0:
-                logger.warning(
-                    "Docker logs failed for %s (exit=%s)",
-                    container,
-                    result.returncode
-                )
-                keyboard = [[InlineKeyboardButton(
-                    "🔙 Назад",
-                    callback_data=f"docker_{container}"
-                )]]
-                await query.edit_message_text(
-                    "❌ Не удалось получить журнал Docker-контейнера",
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
-                return
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "logs", "--tail", "30", container],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
 
-            logs = result.stdout if result.stdout else result.stderr
-
-            if not logs.strip():
-                keyboard = [[InlineKeyboardButton(
-                    "🔙 Назад",
-                    callback_data=f"docker_{container}"
-                )]]
-                await query.edit_message_text(
-                    "ℹ️ Журнал Docker-контейнера пуст",
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
-                return
-            # Ограничиваем длину и экранируем
-            logs = logs[-2000:] if len(logs) > 2000 else logs
-            logs = html.escape(logs)
-            
-            message = f"📊 <b>Логи контейнера</b> <code>{html.escape(container)}</code>:\n\n<pre>{logs}</pre>"
-            
-            keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data=f'docker_{container}')]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
-            return
-        else:
-            await query.edit_message_text(
-                "❌ Неизвестное действие Docker"
-            )
-            return
-        
-        if result.returncode == 0:
-            logger.info(
-                "Docker %s на %s: успешно",
-                action,
-                container
-            )
-        else:
+        if result.returncode != 0:
             logger.warning(
-                "Docker %s на %s: ошибка, exit=%s",
-                action,
-                container,
-                result.returncode
+                "DOCKER-01: logs failed, container=%s, exit=%s",
+                container, result.returncode,
             )
-        
-        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='docker_list')]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(message, parse_mode='Markdown', reply_markup=reply_markup)
-        
+            await query.edit_message_text(
+                "❌ Не удалось получить журнал контейнера",
+                reply_markup=keyboard,
+            )
+            return
+
+        logs = result.stdout if result.stdout else result.stderr
+
+        if not logs.strip():
+            await query.edit_message_text(
+                "ℹ️ Журнал Docker-контейнера пуст",
+                reply_markup=keyboard,
+            )
+            return
+
+        logs = html.escape(logs[-2000:])
+
+        await query.edit_message_text(
+            f"📊 <b>Логи контейнера</b> "
+            f"<code>{html.escape(container)}</code>:\n\n"
+            f"<pre>{logs}</pre>",
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+
     except subprocess.TimeoutExpired:
-        await query.edit_message_text(f"❌ Таймаут при выполнении {action}")
+        await query.edit_message_text(
+            "❌ Таймаут получения журнала Docker",
+            reply_markup=keyboard,
+        )
     except FileNotFoundError:
         await query.edit_message_text(
-            "ℹ️ Docker не установлен на этом сервере",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]])
+            "ℹ️ Docker не установлен на сервере",
+            reply_markup=keyboard,
         )
-    except Exception as e:
-        logger.error(f"Ошибка Docker {action} для {container}: {e}")
-        await query.edit_message_text(f"❌ Ошибка: {str(e)}")
+    except Exception as exc:
+        logger.error(
+            "DOCKER-01: logs exception, container=%s, type=%s",
+            container, type(exc).__name__,
+        )
+        await query.edit_message_text(
+            "❌ Ошибка получения журнала Docker",
+            reply_markup=keyboard,
+        )
+
 
 # ============================================
 # СИСТЕМНАЯ ИНФОРМАЦИЯ
@@ -2512,6 +2722,7 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     context.user_data.pop("pending_power_action", None)
     context.user_data.pop("pending_package_action", None)
+    context.user_data.pop("pending_docker_action", None)
 
     # Сбрасываем все флаги ожидания
     was_unban = context.user_data.get('awaiting_unban_ip', False)
@@ -2749,8 +2960,9 @@ async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data.pop("pending_power_action", None)
     context.user_data.pop("pending_package_action", None)
+    context.user_data.pop("pending_docker_action", None)
     context.user_data['awaiting_traceroute'] = False
-    await query.edit_message_text("🤖 *Admin Bot v2*", reply_markup=main_menu_keyboard(), parse_mode='Markdown')
+    await query.edit_message_text("🤖 *Admin Bot v3*", reply_markup=main_menu_keyboard(), parse_mode='Markdown')
 
 # ============================================
 # ДОПОЛНИТЕЛЬНЫЕ КОМАНДЫ
@@ -3835,7 +4047,7 @@ async def main():
     Инициализирует Application, регистрирует все обработчики команд
     и callback-запросов, запускает polling для получения обновлений.
     """
-    logger.info("Запуск admin bot v2...")
+    logger.info("Запуск admin bot v3...")
     
     app = Application.builder().token(TOKEN).build()
     
@@ -3869,7 +4081,9 @@ async def main():
     
     # Docker
     app.add_handler(CallbackQueryHandler(show_docker_list, pattern='^docker_list$'))
-    app.add_handler(CallbackQueryHandler(docker_action, pattern='^docker_(start|stop|restart|logs)_'))
+    app.add_handler(CallbackQueryHandler(request_docker_action, pattern='^docker_(start|stop|restart)_.+$'))
+    app.add_handler(CallbackQueryHandler(confirm_docker_action, pattern='^docker_(confirm|cancel)$'))
+    app.add_handler(CallbackQueryHandler(docker_action, pattern='^docker_logs_.+$'))
     app.add_handler(CallbackQueryHandler(docker_control, pattern='^docker_'))
     
     # Системная информация
@@ -3944,7 +4158,7 @@ async def main():
     # ===== ОБРАБОТЧИК ТЕКСТА =====
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     
-    logger.info("✅ Admin bot v2 запущен (все обработчики зарегистрированы)")
+    logger.info("✅ Admin bot v3 запущен (все обработчики зарегистрированы)")
     
     # Запуск
     await app.initialize()
@@ -3960,7 +4174,7 @@ async def main():
         await app.updater.stop()
         await app.stop()
         await app.shutdown()
-        logger.info("Admin bot v2 остановлен")
+        logger.info("Admin bot v3 остановлен")
 
 
 if __name__ == '__main__':
