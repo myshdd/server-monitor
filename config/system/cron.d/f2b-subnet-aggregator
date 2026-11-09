@@ -1,0 +1,2 @@
+# Каждые 5 минут со сдвигом на 2 минуты (02, 07, 12, 17...)
+2-57/5 * * * * root /usr/local/bin/f2b-subnet-aggregator.sh

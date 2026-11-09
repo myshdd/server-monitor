@@ -1,7 +1,6 @@
 #!/bin/bash
-# /usr/local/bin/f2b-daily-report.sh
+# /opt/server-monitor/scripts/fail2ban/f2b-daily-report.sh
 # Ежедневный отчёт Fail2ban в Telegram
-# Использует конфигурацию из /root/.config/server-monitor/
 
 # Подключаем библиотеку конфигурации
 source /usr/local/lib/server-monitor/load-config.sh
@@ -20,12 +19,12 @@ fi
 # ============================================
 
 # Получаем статистику от f2b-status.sh
-REPORT=$(/usr/local/bin/f2b-status.sh 2>&1)
+REPORT=$(f2b-status.sh 2>&1)
 
 # Добавляем данные за неделю
 REPORT+="
 
-════════════════════════════════════════════════
+═══════════════════════════════════════
 📊 *Недельная статистика атак:*
 "
 
@@ -52,7 +51,7 @@ done
 # Добавляем время отчёта
 REPORT+="
 
-════════════════════════════════════════════════
+═══════════════════════════════════════
 📅 Отчёт за $(date +%d.%m.%Y)
 🕐 Время: $(date +%H:%M:%S)
 "

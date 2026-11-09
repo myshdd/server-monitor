@@ -1,17 +1,17 @@
 #!/bin/bash
-# /usr/local/bin/f2b-status.sh
+# /opt/server-monitor/scripts/fail2ban/f2b-status.sh
 # Дашборд статуса Fail2ban
-# Использует конфигурацию из /root/.config/server-monitor/
+# Использует централизованную конфигурацию
 
 # Подключаем библиотеку конфигурации
 source /usr/local/lib/server-monitor/load-config.sh
 
-echo "╔══════════════════════════════════════════════╗"
-echo "║        FAIL2BAN STATUS DASHBOARD             ║"
-echo "╚══════════════════════════════════════════════╝"
+echo "╔══════════════════════════════════════════╗"
+echo "║        FAIL2BAN STATUS DASHBOARD         ║"
+echo "╚══════════════════════════════════════════╝"
 echo ""
 echo "Server: $(hostname) | $(date)"
-echo "────────────────────────────────────────────────"
+echo "────────────────────────────────────────────"
 
 # Статус каждого jail
 for jail in $(fail2ban-client status 2>/dev/null | grep "Jail list" | sed 's/.*://;s/,/ /g'); do
@@ -24,7 +24,7 @@ for jail in $(fail2ban-client status 2>/dev/null | grep "Jail list" | sed 's/.*:
         "$jail" "$currently_banned" "$total_banned" "$currently_failed"
 done
 
-echo "────────────────────────────────────────────────"
+echo "────────────────────────────────────────────"
 
 # ipset статистика
 for setname in f2b-banned-subnets f2b-blocklists; do
@@ -34,7 +34,7 @@ for setname in f2b-banned-subnets f2b-blocklists; do
     fi
 done
 
-echo "────────────────────────────────────────────────"
+echo "────────────────────────────────────────────"
 
 # Последние 24 часа статистика
 ATTACKS_24H=$(journalctl -u ssh --since "24 hours ago" --no-pager 2>/dev/null | \

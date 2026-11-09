@@ -1,5 +1,5 @@
 #!/bin/bash
-# /usr/local/bin/full-upgrade.sh - Полное обновление системы
+# /opt/server-monitor/scripts/system/full-upgrade.sh - Полное обновление системы
 
 echo "🔄 Начинаем полное обновление системы..."
 echo ""

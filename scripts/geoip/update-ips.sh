@@ -1,14 +1,13 @@
 #!/bin/bash
-# /root/geoip/update-ips.sh
+# /opt/server-monitor/scripts/geoip/update-ips.sh
 # Обновление списка IP-адресов России
-# Использует конфигурацию из /root/.config/server-monitor/
 
 # Подключаем библиотеку конфигурации
 source /usr/local/lib/server-monitor/load-config.sh
 
 # Загружаем пути
-GEOIP_DIR=$(get_path "data.geoip_dir" "/root/geoip")
-GEOIP_FILE=$(get_path "data.geoip_ru_zone" "/root/geoip/ru.zone")
+GEOIP_DIR=$(get_path "data.geoip_dir" "/opt/server-monitor/data/geoip")
+GEOIP_FILE=$(get_path "data.geoip_ru_zone" "/opt/server-monitor/data/geoip/ru.zone")
 COUNTRY_CODE=$(get_setting "geoip.country_code" "ru")
 GEOIP_SOURCE=$(get_setting "geoip.source" "ipverse")
 
@@ -36,18 +35,16 @@ curl -sf -o "${GEOIP_FILE}.new" "$URL"
 # Проверяем что скачалось успешно
 if [ -s "${GEOIP_FILE}.new" ] && grep -v '^#' "${GEOIP_FILE}.new" | head -5 | grep -q '/'; then
     mv "${GEOIP_FILE}.new" "$GEOIP_FILE"
-    
+
     COUNT=$(grep -v '^#' "$GEOIP_FILE" | wc -l)
     echo "✅ Список IP России обновлён $(date)"
     echo "   Всего диапазонов: $COUNT"
-    
+
     log_info "GeoIP обновлён: $COUNT диапазонов"
-    
-    # Применяем обновлённые правила
-    if [ -f "$GEOIP_DIR/apply-iptables.sh" ]; then
-        "$GEOIP_DIR/apply-iptables.sh"
-    elif [ -f "$GEOIP_DIR/apply-iptables_v2.sh" ]; then
-        "$GEOIP_DIR/apply-iptables_v2.sh"
+
+    # Применяем обновлённые правила через симлинк в /usr/local/bin
+    if command -v apply-iptables.sh &>/dev/null; then
+        apply-iptables.sh
     fi
 else
     echo "❌ Ошибка загрузки списка IP"

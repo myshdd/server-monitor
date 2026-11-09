@@ -1,7 +1,7 @@
 #!/bin/bash
-# /usr/local/bin/f2b-subnet-aggregator.sh
+# /opt/server-monitor/scripts/fail2ban/f2b-subnet-aggregator.sh
 # Агрегация подсетей атакующих IP
-# Использует конфигурацию из /root/.config/server-monitor/
+# Использует централизованную конфигурацию
 
 source /usr/local/lib/server-monitor/load-config.sh
 load_common_vars

@@ -1,7 +1,7 @@
 #!/bin/bash
-# /usr/local/bin/f2b-anomaly-alert.sh
+# /opt/server-monitor/scripts/fail2ban/f2b-anomaly-alert.sh
 # Обнаружение аномалий в Fail2ban и отправка уведомлений в Telegram
-# Использует конфигурацию из /root/.config/server-monitor/
+# Использует централизованную конфигурацию
 
 # Подключаем библиотеку конфигурации
 source /usr/local/lib/server-monitor/load-config.sh
@@ -109,3 +109,6 @@ fi
 echo "$(date +%Y-%m-%d_%H:%M:%S): 15min=$ATTACKS_15MIN, 1h=$ATTACKS_1H, unique=$UNIQUE_IPS" >> "$LOG_FILE"
 
 log_info "Проверка аномалий завершена: 15min=$ATTACKS_15MIN, 1h=$ATTACKS_1H, unique=$UNIQUE_IPS"
+
+# Ждём завершения фоновых процессов
+wait

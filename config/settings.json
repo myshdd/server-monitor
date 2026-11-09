@@ -35,7 +35,15 @@
   "geoip": {
     "country_code": "ru",
     "update_schedule": "weekly",
-    "source": "ipverse"
+    "source": "ipverse",
+    "whitelist_ips": [
+      "127.0.0.0/8",
+      "91.103.211.70",
+      "89.188.96.18"
+    ],
+    "whitelist_domains": [
+      "71af089be9fc.sn.mynetname.net"
+    ]
   },
   "speedtest": {
     "server_update_interval": 86400,

@@ -1,0 +1,26 @@
+# Server Monitor — исключения для Codex
+# Version: 1.0
+# Date: 09.11.2026
+
+config/secrets.json
+config/local/
+.env
+.env.*
+**/*.key
+**/*.pem
+**/*.p12
+**/*.pfx
+
+data/
+*.log
+*.tmp
+*.bak
+*.backup
+*.swp
+
+bots/admin_bot_venv/
+bots/monitor_venv/
+venv/
+env/
+__pycache__/
+.git/

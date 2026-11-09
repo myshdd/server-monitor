@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import asyncio
+import html
 import subprocess
 import psutil
 import os
@@ -13,7 +14,7 @@ import re
 sys.path.insert(0, '/usr/local/lib/server-monitor')
 from config import get_config, setup_logging, ConfigError
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters, TypeHandler, ApplicationHandlerStop
 
 # Загрузка конфигурации
 try:
@@ -26,6 +27,17 @@ except ConfigError as e:
     print(f"❌ Ошибка конфигурации: {e}", file=sys.stderr)
     sys.exit(1)
 
+
+# ============================================
+# УТИЛИТЫ ДЛЯ ЭКРАНИРОВАНИЯ MARKDOWN
+# ============================================
+
+def escape_markdown(text: str) -> str:
+    """Экранирует спецсимволы Markdown v1"""
+    special_chars = r"_*[`"
+    for char in special_chars:
+        text = text.replace(char, f"\\{char}")
+    return text
 # ============================================
 # УТИЛИТЫ ДЛЯ РАБОТЫ С СЕТЬЮ
 # ============================================
@@ -118,6 +130,7 @@ def main_menu_keyboard():
         [InlineKeyboardButton("📦 Обновление системы", callback_data='update_system')],
         [InlineKeyboardButton("📁 Просмотр логов", callback_data='logs_menu')],
         [InlineKeyboardButton("🛡️ Fail2ban Dashboard", callback_data='f2b_status')],
+        [InlineKeyboardButton("🔧 Дополнительные команды", callback_data='extra_menu')],
         [InlineKeyboardButton("📡 Тест скорости", callback_data='iperf_speedtest')],
         [
             InlineKeyboardButton("🔄 Перезагрузка", callback_data='reboot'),
@@ -137,7 +150,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     if not await is_authorized(update):
         return
-    await update.message.reply_text("🤖 *Admin Bot v2*\n\nТестовая версия", reply_markup=main_menu_keyboard(), parse_mode='Markdown')
+    context.user_data.pop("pending_power_action", None)
+    context.user_data.pop("pending_package_action", None)
+    await update.message.reply_text("🤖 *Admin Bot v2*", reply_markup=main_menu_keyboard(), parse_mode='Markdown')
 
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать полную статистику сервера"""
@@ -290,7 +305,7 @@ async def show_network_stats(update: Update, context: ContextTypes.DEFAULT_TYPE)
     period = query.data.replace('net_stats_', '')
     
     # Получаем путь к файлу статистики из конфига
-    stats_file = config.get_path("data.network_stats_file", "/var/lib/network-stats/stats.json")
+    stats_file = config.get_path("data.network_stats_file", "/opt/server-monitor/data/stats.json")
     
     try:
         with open(stats_file, 'r') as f:
@@ -357,7 +372,7 @@ async def show_network_stats(update: Update, context: ContextTypes.DEFAULT_TYPE)
         title += f"🕐 _Обновлено: {data.get('last_update', 'N/A')}_"
         
     except FileNotFoundError:
-        title = "❌ Файл статистики не найден.\n\nЗапустите сбор статистики:\n`/usr/local/bin/collect-network-stats.sh`"
+        title = "❌ Файл статистики не найден.\n\nЗапустите сбор статистики:\n`collect-network-stats.sh`"
     except json.JSONDecodeError as e:
         title = f"❌ Ошибка чтения JSON: {str(e)}"
     except Exception as e:
@@ -411,7 +426,7 @@ async def clear_swap(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def confirm_clear_swap(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Выполнение очистки swap через внешний скрипт.
-    Вызывает /usr/local/bin/clear-swap.sh и отображает результат.
+    Вызывает clear-swap.sh и отображает результат.
     """
     query = update.callback_query
     await query.answer()
@@ -425,7 +440,7 @@ async def confirm_clear_swap(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         # Запускаем скрипт очистки
         result = subprocess.run(
-            ['/usr/local/bin/clear-swap.sh'],
+            ['clear-swap.sh'],
             capture_output=True,
             text=True,
             timeout=30
@@ -462,93 +477,191 @@ async def confirm_clear_swap(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ============================================
 
 async def show_banned_ips(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Отображает список забаненных IP по всем jail'ам Fail2ban.
-    Показывает количество забаненных IP в каждом jail и первые 5 адресов.
-    Предоставляет кнопки для разбана отдельных IP.
-    """
+    """Отображает блокировки Fail2ban с контролем полноты данных."""
+    import html
+    import ipaddress
+
     query = update.callback_query
     await query.answer()
-    
+
+    back_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]
+    ])
+
     try:
-        # Получаем список jail'ов
         result = subprocess.run(
             ['fail2ban-client', 'status'],
             capture_output=True,
             text=True,
             timeout=10
         )
-        
+
         if result.returncode != 0:
-            await query.edit_message_text(
-                "❌ Ошибка получения статуса Fail2ban",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]])
-            )
-            return
-        
-        # Парсим список jail'ов
-        lines = result.stdout.split('\n')
-        jail_list = []
-        for line in lines:
-            if 'Jail list' in line:
-                jail_list = [j.strip() for j in line.split(':\t')[1].strip().split(',')]
-                break
-        
+            raise RuntimeError("Не удалось получить статус Fail2ban")
+
+        jail_line = next(
+            (line for line in result.stdout.splitlines()
+             if "Jail list:" in line),
+            None
+        )
+
+        if jail_line is None:
+            raise ValueError("Отсутствует Jail list")
+
+        jail_text = jail_line.partition("Jail list:")[2].strip()
+        jail_list = (
+            [j.strip() for j in jail_text.split(",")]
+            if jail_text else []
+        )
+
+        if any(
+            not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", jail)
+            for jail in jail_list
+        ):
+            raise ValueError("Некорректный список jail")
+
         if not jail_list:
             await query.edit_message_text(
-                "❌ Нет активных jail'ов Fail2ban",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]])
+                "ℹ️ Активных jail Fail2ban нет.",
+                reply_markup=back_keyboard
             )
             return
-        
-        message = "🔒 *ЗАБАНЕННЫЕ IP*\n\n"
+
+        message = "🔒 <b>ЗАБАНЕННЫЕ IP</b>\n\n"
         keyboard = []
         has_bans = False
-        
-        for jail in jail_list:
-            result = subprocess.run(
-                ['fail2ban-client', 'status', jail],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            
-            if result.returncode == 0:
-                ip_list = []
-                for line in result.stdout.split('\n'):
-                    if 'Banned IP list' in line:
-                        ips = line.split(':\t')[1].strip()
-                        if ips:
-                            ip_list = ips.split(' ')
-                        break
-                
-                if ip_list:
-                    has_bans = True
-                    message += f"*{jail}:* {len(ip_list)} IP\n"
-                    for ip in ip_list[:5]:
-                        message += f"  └ `{ip}`\n"
-                        keyboard.append([InlineKeyboardButton(f"🔓 Разбанить {ip}", callback_data=f'unban_{jail}_{ip}')])
-                    if len(ip_list) > 5:
-                        message += f"  └ ... и еще {len(ip_list) - 5}\n"
-                    message += "\n"
-        
-        if not has_bans:
-            message += "✅ Нет забаненных IP"
-        else:
-            keyboard.append([InlineKeyboardButton("🔓 Разбанить все", callback_data='unban_all')])
-            keyboard.append([InlineKeyboardButton("🔍 Разбанить IP по адресу", callback_data='unban_ip_input')])
+        failed_jails = []
+        shown_jails = 0
+        hidden_jails = 0
 
-        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(message, parse_mode='Markdown', reply_markup=reply_markup)
-        
+        for jail in jail_list:
+            try:
+                result = subprocess.run(
+                    ['fail2ban-client', 'status', jail],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+
+                if result.returncode != 0:
+                    raise RuntimeError("Ошибка получения статуса jail")
+
+                ip_line = next(
+                    (line for line in result.stdout.splitlines()
+                     if "Banned IP list:" in line),
+                    None
+                )
+
+                if ip_line is None:
+                    raise ValueError("Отсутствует Banned IP list")
+
+                ip_text = ip_line.partition("Banned IP list:")[2].strip()
+                ip_list = ip_text.split()
+
+                for ip in ip_list:
+                    if "%" in ip:
+                        raise ValueError("Некорректный IP")
+                    ipaddress.ip_address(ip)
+
+                if not ip_list:
+                    continue
+
+                has_bans = True
+                if shown_jails >= 8:
+                    hidden_jails += 1
+                    continue
+                shown_jails += 1
+                message += (
+                    f"<b>{html.escape(jail)}:</b> "
+                    f"{len(ip_list)} IP\n"
+                )
+
+                for ip in ip_list[:5]:
+                    message += f"  └ <code>{html.escape(ip)}</code>\n"
+
+                    callback = f"unban_{jail}_{ip}"
+                    if len(callback.encode("utf-8")) <= 64:
+                        keyboard.append([
+                            InlineKeyboardButton(
+                                f"🔓 Разбанить {ip}",
+                                callback_data=callback
+                            )
+                        ])
+
+                if len(ip_list) > 5:
+                    message += f"  └ ... и еще {len(ip_list) - 5}\n"
+
+                message += "\n"
+
+            except Exception as e:
+                failed_jails.append(jail)
+                logger.warning(
+                    "Не удалось получить блокировки jail=%s: %s",
+                    jail, type(e).__name__
+                )
+
+        if hidden_jails:
+            message += (
+                f"ℹ️ Не показано jail с блокировками: "
+                f"{hidden_jails}\n"
+            )
+
+        if failed_jails:
+            message += (
+                "⚠️ <b>Данные неполные.</b> "
+                "Не удалось получить сведения для jail: "
+                + ", ".join(html.escape(j) for j in failed_jails[:5])
+                + (f" (и ещё {len(failed_jails) - 5})" if len(failed_jails) > 5 else "")
+                + "\n"
+            )
+
+        if not has_bans:
+            if failed_jails:
+                message += (
+                    "Подтверждённых блокировок в доступных данных нет."
+                )
+            else:
+                message += "✅ Нет забаненных IP"
+
+        if has_bans:
+            keyboard.append([
+                InlineKeyboardButton(
+                    "🔓 Разбанить все", callback_data="unban_all"
+                )
+            ])
+            keyboard.append([
+                InlineKeyboardButton(
+                    "🔍 Разбанить IP по адресу",
+                    callback_data="unban_ip_input"
+                )
+            ])
+
+        keyboard.append([
+            InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")
+        ])
+
+        await query.edit_message_text(
+            message,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
     except subprocess.TimeoutExpired:
         logger.error("Таймаут при получении статуса Fail2ban")
-        await query.edit_message_text("❌ Таймаут при получении данных Fail2ban")
+        await query.edit_message_text(
+            "❌ Таймаут при получении данных Fail2ban",
+            reply_markup=back_keyboard
+        )
+
     except Exception as e:
-        logger.error(f"Ошибка показа забаненных IP: {e}")
-        await query.edit_message_text(f"❌ Ошибка: {str(e)}")
+        logger.error(
+            "Ошибка показа забаненных IP: %s",
+            type(e).__name__
+        )
+        await query.edit_message_text(
+            "❌ Не удалось получить список блокировок Fail2ban",
+            reply_markup=back_keyboard
+        )
 
 
 async def unban_ip(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -559,14 +672,32 @@ async def unban_ip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    # Парсим jail и IP из callback_data
-    parts = query.data.split('_', 2)
-    if len(parts) < 3:
+    # Разбираем и проверяем jail и IP из callback_data
+    import ipaddress
+
+    data = query.data
+    if not isinstance(data, str) or not data.startswith("unban_"):
         await query.edit_message_text("❌ Ошибка: неверный формат данных")
         return
-    
-    jail = parts[1]
-    ip = parts[2]
+
+    parts = data[len("unban_"):].rsplit("_", 1)
+    if len(parts) != 2:
+        await query.edit_message_text("❌ Ошибка: неверный формат данных")
+        return
+
+    jail, ip = parts
+
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", jail):
+        await query.edit_message_text("❌ Некорректное имя jail")
+        return
+
+    try:
+        if "%" in ip:
+            raise ValueError("IPv6 zone identifier is not allowed")
+        ipaddress.ip_address(ip)
+    except ValueError:
+        await query.edit_message_text("❌ Некорректный IP-адрес")
+        return
     
     try:
         result = subprocess.run(
@@ -576,18 +707,46 @@ async def unban_ip(update: Update, context: ContextTypes.DEFAULT_TYPE):
             timeout=10
         )
         
-        if result.returncode == 0:
-            logger.info(f"IP {ip} разбанен в jail {jail}")
-            message = f"✅ IP `{ip}` успешно разбанен в jail `{jail}`"
+        if result.returncode != 0:
+            logger.warning(
+                "Fail2ban unban failed (exit=%s)",
+                result.returncode
+            )
+            message = "❌ Не удалось разблокировать IP в указанном jail"
         else:
-            message = f"❌ Ошибка при разбане: {result.stderr}"
+            count_text = result.stdout.strip()
+
+            if count_text.isascii() and count_text.isdecimal():
+                unbanned_count = int(count_text)
+                if unbanned_count > 0:
+                    logger.info(
+                        "IP %s разбанен в jail %s (count=%s)",
+                        ip, jail, unbanned_count
+                    )
+                    message = (
+                        f"✅ IP <code>{html.escape(ip)}</code> "
+                        f"успешно разбанен в jail "
+                        f"<code>{html.escape(jail)}</code>"
+                    )
+                else:
+                    message = (
+                        f"ℹ️ IP <code>{html.escape(ip)}</code> "
+                        f"не был заблокирован в jail "
+                        f"<code>{html.escape(jail)}</code>"
+                    )
+            else:
+                logger.warning(
+                    "Неожиданный ответ Fail2ban unbanip: %r",
+                    count_text[:100]
+                )
+                message = "❌ Не удалось подтвердить результат разблокировки"
         
         keyboard = [[InlineKeyboardButton("🔙 К списку", callback_data='banned_ips')]]
-        await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text(message, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
             
     except Exception as e:
         logger.error(f"Ошибка разбана IP {ip}: {e}")
-        await query.edit_message_text(f"❌ Ошибка: {str(e)}")
+        await query.edit_message_text("❌ Внутренняя ошибка разблокировки IP")
 
 
 async def unban_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -612,50 +771,74 @@ async def unban_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def confirm_unban_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Выполняет разбан всех IP во всех jail'ах Fail2ban.
-    """
+    """Снимает все блокировки Fail2ban после подтверждения пользователя."""
     query = update.callback_query
     await query.answer()
-    
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔙 К списку", callback_data="banned_ips")]
+    ])
+
     try:
-        # Получаем список jail'ов
         result = subprocess.run(
-            ['fail2ban-client', 'status'],
+            ['fail2ban-client', 'unban', '--all'],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=30
         )
-        
-        lines = result.stdout.split('\n')
-        jail_list = []
-        for line in lines:
-            if 'Jail list' in line:
-                jail_list = [j.strip() for j in line.split(':\t')[1].strip().split(',')]
-                break
-        
-        unbanned_count = 0
-        for jail in jail_list:
-            result = subprocess.run(
-                ['fail2ban-client', 'set', jail, 'unbanip', '--all'],
-                capture_output=True,
-                text=True,
-                timeout=10
+
+        if result.returncode != 0:
+            logger.warning(
+                "Fail2ban mass unban failed (exit=%s)",
+                result.returncode
             )
-            if result.returncode == 0:
-                unbanned_count += 1
-        
-        logger.info(f"Разбанены все IP в {unbanned_count} jail'ах")
-        
-        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='banned_ips')]]
-        await query.edit_message_text(
-            f"✅ Все IP разбанены\n\nОбработано jail'ов: {unbanned_count}",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            message = (
+                "❌ Массовая разблокировка завершилась с ошибкой. "
+                "Результат операции необходимо проверить."
+            )
+        else:
+            count_text = result.stdout.strip()
+
+            if not count_text.isascii() or not count_text.isdecimal():
+                logger.warning(
+                    "Неожиданный ответ Fail2ban mass unban: %r",
+                    count_text[:100]
+                )
+                message = (
+                    "⚠️ Команда массовой разблокировки выполнена, "
+                    "но количество снятых блокировок не подтверждено."
+                )
+            else:
+                removed_count = int(count_text)
+                logger.info(
+                    "Fail2ban mass unban: removed=%s",
+                    removed_count
+                )
+                message = (
+                    "✅ Массовая разблокировка завершена.\n\n"
+                    f"Снято блокировок: {removed_count}"
+                )
+
+    except subprocess.TimeoutExpired:
+        logger.error("Таймаут массовой разблокировки Fail2ban")
+        message = (
+            "⚠️ Превышено время ожидания Fail2ban. "
+            "Результат операции неизвестен — проверьте список блокировок."
         )
-        
+
     except Exception as e:
-        logger.error(f"Ошибка разбана всех IP: {e}")
-        await query.edit_message_text(f"❌ Ошибка: {str(e)}")
+        logger.error(
+            "Ошибка массовой разблокировки Fail2ban: %s",
+            type(e).__name__
+        )
+        message = (
+            "❌ Не удалось подтвердить выполнение массовой разблокировки."
+        )
+
+    await query.edit_message_text(
+        message,
+        reply_markup=keyboard
+    )
 
 
 async def ask_unban_ip(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -670,7 +853,9 @@ async def ask_unban_ip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_text(
         "🔍 *Введите IP адрес для разбана*\n\n"
-        "Отправьте IP в формате: `xxx.xxx.xxx.xxx`\n"
+        "Поддерживаются IPv4 и IPv6.\n"
+        "Пример IPv4: `192.0.2.10`\n"
+        "Пример IPv6: `2001:db8::1`\n"
         "Или отправьте /cancel для отмены.",
         parse_mode='Markdown'
     )
@@ -684,7 +869,7 @@ async def ask_unban_ip(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def f2b_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Отображает полный дашборд Fail2ban.
-    Вызывает внешний скрипт /usr/local/bin/f2b-status.sh
+    Вызывает внешний скрипт f2b-status.sh
     и показывает его вывод в Telegram.
     """
     query = update.callback_query
@@ -692,7 +877,7 @@ async def f2b_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         result = subprocess.run(
-            ['/usr/local/bin/f2b-status.sh'],
+            ['f2b-status.sh'],
             capture_output=True,
             text=True,
             timeout=30
@@ -730,6 +915,15 @@ async def f2b_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Просмотр и управление Docker контейнерами
 # ============================================
 
+def is_valid_docker_container_name(name: str) -> bool:
+    """Проверяет допустимый формат имени контейнера."""
+    return (
+        isinstance(name, str)
+        and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name)
+        is not None
+    )
+
+
 async def show_docker_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Отображает список всех Docker контейнеров.
@@ -747,6 +941,16 @@ async def show_docker_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             timeout=10
         )
         
+        if result.returncode != 0:
+            logger.error(
+                "docker ps failed: %s",
+                result.stderr.strip()
+            )
+            await query.edit_message_text(
+                "❌ Не удалось получить список Docker-контейнеров"
+            )
+            return
+
         if not result.stdout.strip():
             await query.edit_message_text(
                 "❌ Нет Docker контейнеров",
@@ -765,7 +969,7 @@ async def show_docker_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 image = parts[2] if len(parts) > 2 else "unknown"
                 
                 status_emoji = "✅" if "Up" in status else "⏹"
-                message += f"{status_emoji} `{name}` ({image})\n"
+                message += f"{status_emoji} `{escape_markdown(name)}` ({escape_markdown(image)})\n"
                 keyboard.append([InlineKeyboardButton(f"{status_emoji} {name}", callback_data=f'docker_{name}')])
         
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')])
@@ -775,6 +979,11 @@ async def show_docker_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except subprocess.TimeoutExpired:
         await query.edit_message_text("❌ Таймаут при получении списка контейнеров")
+    except FileNotFoundError:
+        await query.edit_message_text(
+            "ℹ️ Docker не установлен на этом сервере",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]])
+        )
     except Exception as e:
         logger.error(f"Ошибка получения списка Docker: {e}")
         await query.edit_message_text(f"❌ Ошибка: {str(e)}")
@@ -786,14 +995,21 @@ async def docker_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Отображает текущий статус и кнопки: запуск, остановка, перезапуск, логи.
     """
     query = update.callback_query
-    await query.answer()
     
     # Получаем имя контейнера из callback_data
-    container = query.data.replace('docker_', '')
+    container = query.data.removeprefix('docker_')
     
     # Проверяем, что это не служебное слово
     if container in ['list', 'start', 'stop', 'restart', 'logs']:
         await show_docker_list(update, context)
+        return
+
+    await query.answer()
+
+    if not is_valid_docker_container_name(container):
+        await query.edit_message_text(
+            "❌ Некорректное имя Docker-контейнера"
+        )
         return
     
     try:
@@ -804,6 +1020,17 @@ async def docker_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text=True,
             timeout=10
         )
+        if result.returncode != 0:
+            logger.warning(
+                "docker inspect failed for %s (exit=%s)",
+                container,
+                result.returncode
+            )
+            await query.edit_message_text(
+                "❌ Не удалось получить состояние Docker-контейнера"
+            )
+            return
+
         status = result.stdout.strip()
         
         keyboard = [
@@ -820,13 +1047,18 @@ async def docker_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status_emoji = "✅" if status == "running" else "⏹" if status == "exited" else "❓"
         
         await query.edit_message_text(
-            f"🐳 *Управление контейнером:* `{container}`\n\n"
+            f"🐳 *Управление контейнером:* `{escape_markdown(container)}`\n\n"
             f"Статус: {status_emoji} {status}\n\n"
             f"Выберите действие:",
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
         
+    except FileNotFoundError:
+        await query.edit_message_text(
+            "ℹ️ Docker не установлен на этом сервере",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]])
+        )
     except Exception as e:
         logger.error(f"Ошибка управления контейнером {container}: {e}")
         await query.edit_message_text(f"❌ Ошибка: {str(e)}")
@@ -849,6 +1081,12 @@ async def docker_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     action = parts[1]
     container = parts[2]
+
+    if not is_valid_docker_container_name(container):
+        await query.edit_message_text(
+            "❌ Некорректное имя Docker-контейнера"
+        )
+        return
     
     try:
         if action == 'start':
@@ -858,7 +1096,7 @@ async def docker_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=True,
                 timeout=30
             )
-            message = f"✅ Контейнер `{container}` запущен" if result.returncode == 0 else f"❌ Ошибка: {result.stderr}"
+            message = f"✅ Контейнер `{escape_markdown(container)}` запущен" if result.returncode == 0 else f"❌ Ошибка: {result.stderr}"
             
         elif action == 'stop':
             result = subprocess.run(
@@ -867,7 +1105,7 @@ async def docker_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=True,
                 timeout=30
             )
-            message = f"✅ Контейнер `{container}` остановлен" if result.returncode == 0 else f"❌ Ошибка: {result.stderr}"
+            message = f"✅ Контейнер `{escape_markdown(container)}` остановлен" if result.returncode == 0 else f"❌ Ошибка: {result.stderr}"
             
         elif action == 'restart':
             result = subprocess.run(
@@ -876,7 +1114,7 @@ async def docker_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=True,
                 timeout=60
             )
-            message = f"✅ Контейнер `{container}` перезапущен" if result.returncode == 0 else f"❌ Ошибка: {result.stderr}"
+            message = f"✅ Контейнер `{escape_markdown(container)}` перезапущен" if result.returncode == 0 else f"❌ Ошибка: {result.stderr}"
             
         elif action == 'logs':
             result = subprocess.run(
@@ -885,21 +1123,63 @@ async def docker_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=True,
                 timeout=10
             )
+            if result.returncode != 0:
+                logger.warning(
+                    "Docker logs failed for %s (exit=%s)",
+                    container,
+                    result.returncode
+                )
+                keyboard = [[InlineKeyboardButton(
+                    "🔙 Назад",
+                    callback_data=f"docker_{container}"
+                )]]
+                await query.edit_message_text(
+                    "❌ Не удалось получить журнал Docker-контейнера",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+                return
+
             logs = result.stdout if result.stdout else result.stderr
+
+            if not logs.strip():
+                keyboard = [[InlineKeyboardButton(
+                    "🔙 Назад",
+                    callback_data=f"docker_{container}"
+                )]]
+                await query.edit_message_text(
+                    "ℹ️ Журнал Docker-контейнера пуст",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+                return
             # Ограничиваем длину и экранируем
             logs = logs[-2000:] if len(logs) > 2000 else logs
-            logs = logs.replace('`', "'")
+            logs = html.escape(logs)
             
-            message = f"📊 *Логи контейнера* `{container}`:\n\n```\n{logs}\n```"
+            message = f"📊 <b>Логи контейнера</b> <code>{html.escape(container)}</code>:\n\n<pre>{logs}</pre>"
             
             keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data=f'docker_{container}')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+            await query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
             return
         else:
-            message = f"❌ Неизвестное действие: {action}"
+            await query.edit_message_text(
+                "❌ Неизвестное действие Docker"
+            )
+            return
         
-        logger.info(f"Docker {action} на {container}: успешно")
+        if result.returncode == 0:
+            logger.info(
+                "Docker %s на %s: успешно",
+                action,
+                container
+            )
+        else:
+            logger.warning(
+                "Docker %s на %s: ошибка, exit=%s",
+                action,
+                container,
+                result.returncode
+            )
         
         keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='docker_list')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -907,6 +1187,11 @@ async def docker_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except subprocess.TimeoutExpired:
         await query.edit_message_text(f"❌ Таймаут при выполнении {action}")
+    except FileNotFoundError:
+        await query.edit_message_text(
+            "ℹ️ Docker не установлен на этом сервере",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]])
+        )
     except Exception as e:
         logger.error(f"Ошибка Docker {action} для {container}: {e}")
         await query.edit_message_text(f"❌ Ошибка: {str(e)}")
@@ -948,12 +1233,17 @@ async def show_sysinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             timeout=5
         ).stdout.strip()
         
-        docker_version = subprocess.run(
-            ['docker', '--version'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        ).stdout.strip()
+        try:
+            docker_version = subprocess.run(
+                ['docker', '--version'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            ).stdout.strip()
+            if not docker_version:
+                docker_version = "не установлен"
+        except FileNotFoundError:
+            docker_version = "не установлен"
         
         # Сетевые настройки
         net_info = "\n🌐 *Сетевые настройки:*\n"
@@ -1044,6 +1334,48 @@ async def show_sysinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Управление пакетами через apt: проверка, обновление, исправление
 # ============================================
 
+
+# Общая блокировка пакетных операций внутри процесса Admin Bot.
+# Не заменяет системные блокировки apt/dpkg.
+import threading as _package_threading
+from functools import wraps as _package_wraps
+
+_PACKAGE_OPERATION_LOCK = _package_threading.Lock()
+
+
+def _package_operation_guard(handler):
+    @_package_wraps(handler)
+    async def guarded(update, context):
+        query = update.callback_query
+
+        # Просмотр обновлений и запрос подтверждения не изменяют пакеты.
+        if (
+            handler.__name__ == "update_action"
+            and query.data != "update_refresh"
+        ):
+            return await handler(update, context)
+
+        if not _PACKAGE_OPERATION_LOCK.acquire(blocking=False):
+            await query.answer()
+            await query.edit_message_text(
+                "⚠️ Другая пакетная операция уже выполняется. "
+                "Повторите запрос после её завершения.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "🔙 Назад", callback_data="update_system"
+                    )
+                ]])
+            )
+            return
+
+        try:
+            return await handler(update, context)
+        finally:
+            _PACKAGE_OPERATION_LOCK.release()
+
+    return guarded
+
+
 async def update_system(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Главное меню управления обновлениями системы.
@@ -1052,6 +1384,7 @@ async def update_system(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     query = update.callback_query
     await query.answer()
+    context.user_data.pop("pending_package_action", None)
     
     # Информация о последнем обновлении
     last_update = "Неизвестно"
@@ -1070,7 +1403,7 @@ async def update_system(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📦 Проверить обновления", callback_data='update_check')],
         [InlineKeyboardButton("🔄 Обновить список пакетов", callback_data='update_refresh')],
         [InlineKeyboardButton("⬆️ Обновить все пакеты", callback_data='update_upgrade')],
-        [InlineKeyboardButton("🔧 Исправить проблемы", callback_data='fix_broken')],
+        [InlineKeyboardButton("🔧 Исправить проблемы", callback_data='request_fix_broken')],
         [InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1084,6 +1417,7 @@ async def update_system(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+@_package_operation_guard
 async def update_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Обработчик действий с обновлениями.
@@ -1110,11 +1444,15 @@ async def update_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if result.returncode == 0:
                 message = "✅ Список пакетов успешно обновлен"
             else:
-                message = f"❌ Ошибка:\n```\n{result.stderr[:500]}\n```"
+                message = "❌ Не удалось обновить список пакетов. Проверьте журнал службы."
         except subprocess.TimeoutExpired:
             message = "❌ Таймаут при обновлении списка пакетов"
         except Exception as e:
-            message = f"❌ Ошибка: {str(e)}"
+            logger.error(
+                "SYS-03: update_refresh exception, type=%s",
+                type(e).__name__
+            )
+            message = "❌ Ошибка обновления списка пакетов."
         
         keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='update_system')]]
         await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
@@ -1129,6 +1467,21 @@ async def update_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 timeout=60
             )
             
+            if result.returncode != 0:
+                logger.error(
+                    "SYS-03: update_check failed, exit=%s",
+                    result.returncode
+                )
+                await query.edit_message_text(
+                    "❌ Не удалось проверить доступные обновления.",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton(
+                            "🔙 Назад", callback_data="update_system"
+                        )
+                    ]])
+                )
+                return
+
             lines = result.stdout.split('\n')
             updates = [line for line in lines if '/' in line and 'Listing' not in line]
             
@@ -1149,11 +1502,26 @@ async def update_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
             
+        except subprocess.TimeoutExpired:
+            logger.error("SYS-03: update_check timeout")
+            await query.edit_message_text(
+                "❌ Превышено время ожидания проверки обновлений."
+            )
         except Exception as e:
-            await query.edit_message_text(f"❌ Ошибка: {str(e)}")
+            logger.error(
+                "SYS-03: update_check exception, type=%s",
+                type(e).__name__
+            )
+            await query.edit_message_text(
+                "❌ Не удалось проверить доступные обновления."
+            )
         
     elif action == 'upgrade':
         # Запрос подтверждения обновления
+        import time
+        # Новый запрос отменяет предыдущее разрешение.
+        context.user_data.pop("pending_package_action", None)
+
         keyboard = [
             [InlineKeyboardButton("✅ Да, обновить все", callback_data='confirm_upgrade')],
             [InlineKeyboardButton("❌ Нет, отмена", callback_data='update_system')]
@@ -1169,14 +1537,45 @@ async def update_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=reply_markup
         )
 
+        context.user_data["pending_package_action"] = {
+            "action": "upgrade",
+            "chat_id": query.message.chat.id,
+            "message_id": query.message.message_id,
+            "expires_at": time.monotonic() + 60,
+        }
 
+
+@_package_operation_guard
 async def confirm_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Выполняет полное обновление системы.
-    Последовательно: apt update, apt upgrade, apt dist-upgrade, apt autoremove.
+    Последовательно: apt update, apt upgrade, проверка доступных обновлений.
     """
     query = update.callback_query
     await query.answer()
+
+    import time
+    pending = context.user_data.pop("pending_package_action", None)
+    valid = (
+        isinstance(pending, dict)
+        and pending.get("action") == "upgrade"
+        and pending.get("chat_id") == query.message.chat.id
+        and pending.get("message_id") == query.message.message_id
+        and isinstance(pending.get("expires_at"), (int, float))
+        and time.monotonic() <= pending["expires_at"]
+    )
+    if not valid:
+        logger.warning("SYS-03: upgrade rejected without confirmation")
+        await query.edit_message_text(
+            "❌ Подтверждение обновления отсутствует, "
+            "истекло или уже использовано.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "🔙 Назад", callback_data="update_system"
+                )
+            ]])
+        )
+        return
     
     await query.edit_message_text(
         "🔄 *Обновление системы...*\n\n"
@@ -1198,9 +1597,13 @@ async def confirm_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         if update_result.returncode != 0:
+            logger.error(
+                "SYS-03: upgrade apt update failed, exit=%s",
+                update_result.returncode
+            )
             keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='update_system')]]
             await query.edit_message_text(
-                f"❌ Ошибка при обновлении списка:\n```\n{update_result.stderr[:500]}\n```",
+                "❌ Не удалось обновить список пакетов. Дальнейшие операции остановлены.",
                 parse_mode='Markdown',
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
@@ -1215,38 +1618,27 @@ async def confirm_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         upgrade_result = subprocess.run(
-            ['apt', 'upgrade', '-y', '-o', 'Dpkg::Options::=--force-confdef', '-o', 'Dpkg::Options::=--force-confold'],
+            ['apt-get', '--no-remove', 'upgrade', '-y', '-o', 'Dpkg::Options::=--force-confdef', '-o', 'Dpkg::Options::=--force-confold'],
             capture_output=True,
             text=True,
             timeout=600,
             env=env
         )
-        
-        # Шаг 3: apt dist-upgrade
-        await query.edit_message_text(
-            "🔄 *Обновление системы...*\n\n"
-            "✅ Список пакетов обновлен\n"
-            "✅ upgrade выполнен\n"
-            "3️⃣ dist-upgrade...",
-            parse_mode='Markdown'
-        )
-        
-        dist_upgrade_result = subprocess.run(
-            ['apt', 'dist-upgrade', '-y', '-o', 'Dpkg::Options::=--force-confdef', '-o', 'Dpkg::Options::=--force-confold'],
-            capture_output=True,
-            text=True,
-            timeout=600,
-            env=env
-        )
-        
-        # Шаг 4: autoremove
-        autoremove_result = subprocess.run(
-            ['apt', 'autoremove', '-y'],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            env=env
-        )
+
+        if upgrade_result.returncode != 0:
+            logger.error(
+                "SYS-03: %s failed, exit=%s",
+                "upgrade", upgrade_result.returncode
+            )
+            await query.edit_message_text(
+                '❌ Ошибка выполнения этапа upgrade. Дальнейшие операции остановлены. Проверьте состояние пакетного менеджера.',
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "🔙 Назад", callback_data="update_system"
+                    )
+                ]])
+            )
+            return
         
         # Проверка результата
         check_result = subprocess.run(
@@ -1255,19 +1647,32 @@ async def confirm_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text=True,
             timeout=30
         )
+
+        if check_result.returncode != 0:
+            logger.error(
+                "SYS-03: %s failed, exit=%s",
+                "list", check_result.returncode
+            )
+            await query.edit_message_text(
+                '❌ Ошибка выполнения этапа list. Дальнейшие операции остановлены. Проверьте состояние пакетного менеджера.',
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "🔙 Назад", callback_data="update_system"
+                    )
+                ]])
+            )
+            return
         remaining = [line for line in check_result.stdout.split('\n') if '/' in line and 'Listing' not in line]
         
         if remaining:
             message = (
-                "⚠️ *Не все пакеты обновлены*\n\n"
-                f"Осталось: {len(remaining)} пакетов\n\n"
-                "Попробуйте:\n"
-                "`sudo apt dist-upgrade`\n"
-                "`sudo apt --fix-broken install`"
+                "⚠️ *Стандартное обновление завершено*\n\n"
+                f"Осталось доступных обновлений: {len(remaining)}.\n"
+                "Для их установки требуется отдельная проверка."
             )
         else:
-            message = "✅ *Система полностью обновлена!*"
-        
+            message = "✅ *Стандартное обновление пакетов завершено.*"
+
         logger.info("Обновление системы завершено")
         
         keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='update_system')]]
@@ -1280,21 +1685,87 @@ async def confirm_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     except Exception as e:
-        logger.error(f"Ошибка обновления системы: {e}")
+        logger.error(
+            "SYS-03: upgrade exception, type=%s",
+            type(e).__name__
+        )
         keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='update_system')]]
         await query.edit_message_text(
-            f"❌ Ошибка: {str(e)}",
+            "❌ Ошибка обновления системы. Проверьте журнал службы.",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
 
+
+async def request_fix_broken(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Запрашивает подтверждение исправления пакетов."""
+    import time
+
+    query = update.callback_query
+    await query.answer()
+
+    context.user_data.pop("pending_package_action", None)
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            "✅ Да, исправить пакеты", callback_data="fix_broken"
+        )],
+        [InlineKeyboardButton(
+            "❌ Нет, отмена", callback_data="update_system"
+        )],
+    ])
+
+    await query.edit_message_text(
+        "⚠️ *ВНИМАНИЕ!*\n\n"
+        "Будет выполнена команда apt-get --no-remove -f install -y.\n"
+        "Автоматический dist-upgrade не выполняется.\n"
+        "Возможны установка и обновление пакетов "
+        "и перезапуск служб. Удаление пакетов запрещено.\n\n"
+        "Продолжить?",
+        parse_mode="Markdown",
+        reply_markup=keyboard
+    )
+
+    context.user_data["pending_package_action"] = {
+        "action": "fix_broken",
+        "chat_id": query.message.chat.id,
+        "message_id": query.message.message_id,
+        "expires_at": time.monotonic() + 60,
+    }
+
+@_package_operation_guard
 async def fix_broken_packages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Исправляет проблемные пакеты.
-    Выполняет: apt --fix-broken install, apt dist-upgrade.
+    Выполняет: apt --fix-broken install.
     """
     query = update.callback_query
     await query.answer()
+
+    import time
+    pending = context.user_data.pop("pending_package_action", None)
+    valid = (
+        isinstance(pending, dict)
+        and pending.get("action") == "fix_broken"
+        and pending.get("chat_id") == query.message.chat.id
+        and pending.get("message_id") == query.message.message_id
+        and isinstance(pending.get("expires_at"), (int, float))
+        and time.monotonic() <= pending["expires_at"]
+    )
+
+    if not valid:
+        logger.warning("SYS-03: fix_broken rejected without confirmation")
+        await query.edit_message_text(
+            "❌ Подтверждение исправления пакетов отсутствует, "
+            "истекло или уже использовано.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "🔙 Назад", callback_data="update_system"
+                )
+            ]])
+        )
+        return
+
     
     await query.edit_message_text(
         "🔧 *Исправление проблемных пакетов...*",
@@ -1307,42 +1778,32 @@ async def fix_broken_packages(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         # Шаг 1: --fix-broken
         fix_result = subprocess.run(
-            ['apt', '--fix-broken', 'install', '-y'],
+            ['apt-get', '--no-remove', '-f', 'install', '-y'],
             capture_output=True,
             text=True,
             timeout=300,
             env=env
         )
-        
-        # Шаг 2: dist-upgrade
-        dist_result = subprocess.run(
-            ['apt', 'dist-upgrade', '-y'],
-            capture_output=True,
-            text=True,
-            timeout=300,
-            env=env
-        )
-        
-        # Проверка результата
-        check_result = subprocess.run(
-            ['apt', 'list', '--upgradable'],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-        remaining = [line for line in check_result.stdout.split('\n') if '/' in line and 'Listing' not in line]
-        
-        if remaining:
-            message = (
-                "⚠️ *Проблема не полностью решена*\n\n"
-                f"Осталось пакетов: {len(remaining)}\n\n"
-                "Попробуйте выполнить вручную:\n"
-                "`sudo apt --fix-broken install`\n"
-                "`sudo dpkg --configure -a`"
+
+        if fix_result.returncode != 0:
+            logger.error(
+                "SYS-03: %s failed, exit=%s",
+                "--fix-broken", fix_result.returncode
             )
-        else:
-            message = "✅ *Все проблемы исправлены!*"
+            await query.edit_message_text(
+                '❌ Ошибка выполнения этапа --fix-broken. Дальнейшие операции остановлены. Проверьте состояние пакетного менеджера.',
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "🔙 Назад", callback_data="update_system"
+                    )
+                ]])
+            )
+            return
         
+        message = (
+            "✅ *Команда исправления зависимостей выполнена успешно.*"
+        )
+
         logger.info("Исправление пакетов завершено")
         
         keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='update_system')]]
@@ -1352,9 +1813,12 @@ async def fix_broken_packages(update: Update, context: ContextTypes.DEFAULT_TYPE
         keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='update_system')]]
         await query.edit_message_text("❌ Таймаут", reply_markup=InlineKeyboardMarkup(keyboard))
     except Exception as e:
-        logger.error(f"Ошибка исправления пакетов: {e}")
+        logger.error(
+            "SYS-03: fix_broken exception, type=%s",
+            type(e).__name__
+        )
         keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='update_system')]]
-        await query.edit_message_text(f"❌ Ошибка: {str(e)}", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text("❌ Ошибка исправления пакетов. Проверьте журнал службы.", reply_markup=InlineKeyboardMarkup(keyboard))
 
 # ============================================
 # ПРОСМОТР ЛОГОВ
@@ -1482,43 +1946,83 @@ async def show_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ Неизвестный тип лога")
 
 
+def read_safe_log(value: str, max_lines: int = 50) -> str:
+    """Безопасно читает последние строки обычного файла внутри /var/log."""
+    import stat
+    from contextlib import ExitStack
+
+    if not isinstance(value, str) or not os.path.isabs(value):
+        raise ValueError("Недопустимый путь к журналу")
+
+    if "\x00" in value:
+        raise ValueError("Недопустимый путь к журналу")
+
+    base = "/var/log"
+    path = os.path.normpath(value)
+
+    try:
+        relative = os.path.relpath(path, base)
+        if relative == "." or relative == ".." or relative.startswith("../"):
+            raise ValueError("Доступ к файлу запрещён")
+    except ValueError:
+        raise ValueError("Доступ к файлу запрещён") from None
+
+    parts = relative.split(os.sep)
+
+    directory_flags = (
+        os.O_RDONLY | os.O_DIRECTORY |
+        os.O_NOFOLLOW | os.O_CLOEXEC
+    )
+    file_flags = (
+        os.O_RDONLY | os.O_NOFOLLOW |
+        os.O_CLOEXEC | os.O_NONBLOCK
+    )
+
+    with ExitStack() as stack:
+        directory_fd = os.open(base, directory_flags)
+        stack.callback(os.close, directory_fd)
+
+        for component in parts[:-1]:
+            next_fd = os.open(
+                component, directory_flags, dir_fd=directory_fd
+            )
+            stack.callback(os.close, next_fd)
+            directory_fd = next_fd
+
+        fd = os.open(parts[-1], file_flags, dir_fd=directory_fd)
+        stack.callback(os.close, fd)
+
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("Разрешено чтение только обычных файлов")
+
+        limit = 256 * 1024
+        size = min(info.st_size, limit)
+        offset = max(0, info.st_size - size)
+
+        data = os.pread(fd, size, offset)
+
+    content = data.decode("utf-8", errors="replace")
+    return "\n".join(content.splitlines()[-max_lines:])
+
+
 async def show_file_log(query, log_path: str, log_type: str = None):
     """
     Вспомогательная функция для отображения содержимого лог-файла.
     Читает последние 50 строк файла и форматирует для Telegram.
     """
-    if not os.path.exists(log_path):
-        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='logs_menu')]]
-        await query.edit_message_text(
-            f"❌ Файл не найден: `{log_path}`",
-            parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return
-    
     try:
-        result = subprocess.run(
-            ['tail', '-50', log_path],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        
-        if result.returncode == 0:
-            log_content = result.stdout
-            
-            # Ограничиваем длину (Telegram лимит)
-            if len(log_content) > 3000:
-                log_content = log_content[-3000:]
-            
-            # Экранируем спецсимволы Markdown
-            log_content = log_content.replace('`', "'")
-            
-            filename = os.path.basename(log_path)
-            message = f"📁 *{filename}*\n\n```\n{log_content}\n```"
-        else:
-            message = f"❌ Ошибка чтения: {result.stderr}"
-        
+        log_content = read_safe_log(log_path)
+
+        # Ограничиваем длину сообщения Telegram
+        if len(log_content) > 3000:
+            log_content = log_content[-3000:]
+
+        # Сохраняем существующее форматирование
+
+        filename = os.path.basename(log_path)
+        message = f"📁 <b>{html.escape(filename)}</b>\n\n<pre>{html.escape(log_content)}</pre>"
+
         # Определяем callback для кнопки обновления
         refresh_callback = f'logs_{log_type}' if log_type else 'logs_menu'
         
@@ -1529,12 +2033,19 @@ async def show_file_log(query, log_path: str, log_type: str = None):
         
         await query.edit_message_text(
             message,
-            parse_mode='Markdown',
+            parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         
-    except subprocess.TimeoutExpired:
-        await query.edit_message_text("❌ Таймаут при чтении файла")
+    except (ValueError, OSError) as e:
+        logger.warning("Отказ при чтении журнала: %s", type(e).__name__)
+        keyboard = [[InlineKeyboardButton(
+            "🔙 Назад", callback_data="logs_menu"
+        )]]
+        await query.edit_message_text(
+            "❌ Доступ к файлу запрещён или файл недоступен",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
     except Exception as e:
         logger.error(f"Ошибка чтения лога {log_path}: {e}")
         await query.edit_message_text(f"❌ Ошибка: {str(e)}")
@@ -1759,7 +2270,7 @@ async def iperf_speedtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         result = subprocess.run(
-            ['/usr/local/bin/speedtest-iperf.sh'],
+            ['speedtest-iperf.sh'],
             capture_output=True,
             text=True,
             timeout=60
@@ -1810,88 +2321,219 @@ async def iperf_speedtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================
 
 async def confirm_reboot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Запрос подтверждения перезагрузки сервера.
-    """
+    """Запрашивает одноразовое подтверждение перезагрузки."""
+    import time
+
     query = update.callback_query
     await query.answer()
-    
-    keyboard = [
-        [InlineKeyboardButton("✅ Да, перезагрузить", callback_data='execute_reboot')],
-        [InlineKeyboardButton("❌ Нет, отмена", callback_data='back_to_main')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
+
+    # Старое разрешение недействительно после нового запроса.
+    context.user_data.pop("pending_power_action", None)
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            "✅ Да, перезагрузить", callback_data="execute_reboot"
+        )],
+        [InlineKeyboardButton(
+            "❌ Нет, отмена", callback_data="execute_power_cancel"
+        )]
+    ])
+
     await query.edit_message_text(
         "⚠️ *ВНИМАНИЕ!*\n\n"
         "Вы действительно хотите перезагрузить сервер?\n\n"
         "Все активные соединения будут разорваны.",
-        parse_mode='Markdown',
-        reply_markup=reply_markup
+        parse_mode="Markdown",
+        reply_markup=keyboard
     )
+
+    context.user_data["pending_power_action"] = {
+        "action": "reboot",
+        "chat_id": query.message.chat.id,
+        "message_id": query.message.message_id,
+        "expires_at": time.monotonic() + 60,
+    }
 
 
 async def confirm_shutdown(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Запрос подтверждения выключения сервера.
-    """
+    """Запрашивает одноразовое подтверждение выключения."""
+    import time
+
     query = update.callback_query
     await query.answer()
-    
-    keyboard = [
-        [InlineKeyboardButton("✅ Да, выключить", callback_data='execute_shutdown')],
-        [InlineKeyboardButton("❌ Нет, отмена", callback_data='back_to_main')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
+
+    context.user_data.pop("pending_power_action", None)
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            "✅ Да, выключить", callback_data="execute_shutdown"
+        )],
+        [InlineKeyboardButton(
+            "❌ Нет, отмена", callback_data="execute_power_cancel"
+        )]
+    ])
+
     await query.edit_message_text(
         "⚠️ *ВНИМАНИЕ!*\n\n"
         "Вы действительно хотите ВЫКЛЮЧИТЬ сервер?\n\n"
         "⛔ Для включения потребуется физический доступ!",
-        parse_mode='Markdown',
-        reply_markup=reply_markup
+        parse_mode="Markdown",
+        reply_markup=keyboard
     )
+
+    context.user_data["pending_power_action"] = {
+        "action": "shutdown",
+        "chat_id": query.message.chat.id,
+        "message_id": query.message.message_id,
+        "expires_at": time.monotonic() + 60,
+    }
 
 
 async def execute_power_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Выполняет перезагрузку или выключение сервера.
-    Использует systemctl для безопасного управления питанием.
-    """
+    """Выполняет подтверждённую однократную операцию питания."""
+    import time
+
     query = update.callback_query
     await query.answer()
-    
-    action = query.data.replace('execute_', '')
-    
-    if action == 'reboot':
+
+    action = query.data.removeprefix("execute_")
+
+    # Разрешение уничтожается при первом обращении к обработчику.
+    pending = context.user_data.pop("pending_power_action", None)
+
+    if action == "power_cancel":
         await query.edit_message_text(
-            "🔄 *Перезагрузка сервера...*\n\n"
-            "Сервер будет перезагружен через 5 секунд.",
-            parse_mode='Markdown'
+            "❌ Операция отменена",
+            reply_markup=main_menu_keyboard()
         )
-        logger.warning("Инициирована перезагрузка сервера через бота")
-        await asyncio.sleep(5)
-        
-        try:
-            subprocess.run(['systemctl', 'reboot'], timeout=10)
-        except Exception as e:
-            logger.error(f"Ошибка перезагрузки: {e}")
-            await query.edit_message_text(f"❌ Ошибка перезагрузки: {str(e)}")
-    
-    elif action == 'shutdown':
+        return
+
+    commands = {
+        "reboot": ["systemctl", "reboot"],
+        "shutdown": ["systemctl", "poweroff"],
+    }
+
+    if action not in commands:
         await query.edit_message_text(
-            "⏻ *Выключение сервера...*\n\n"
-            "Сервер будет выключен через 5 секунд.",
-            parse_mode='Markdown'
+            "❌ Недопустимая операция",
+            reply_markup=main_menu_keyboard()
         )
-        logger.warning("Инициировано выключение сервера через бота")
-        await asyncio.sleep(5)
-        
-        try:
-            subprocess.run(['systemctl', 'poweroff'], timeout=10)
-        except Exception as e:
-            logger.error(f"Ошибка выключения: {e}")
-            await query.edit_message_text(f"❌ Ошибка выключения: {str(e)}")
+        return
+
+    valid = (
+        isinstance(pending, dict)
+        and pending.get("action") == action
+        and pending.get("chat_id") == query.message.chat.id
+        and pending.get("message_id") == query.message.message_id
+        and isinstance(pending.get("expires_at"), (int, float))
+        and time.monotonic() <= pending["expires_at"]
+    )
+
+    if not valid:
+        logger.warning(
+            "Отклонена операция питания без действительного подтверждения: %s",
+            action
+        )
+        await query.edit_message_text(
+            "❌ Подтверждение отсутствует, уже использовано "
+            "или срок его действия истёк.",
+            reply_markup=main_menu_keyboard()
+        )
+        return
+
+    description = (
+        "перезагрузки" if action == "reboot" else "выключения"
+    )
+
+    # Если Telegram не принимает предупреждение, команда не запускается.
+    await query.edit_message_text(
+        f"⚠️ Подготовка {description} сервера.\n\n"
+        "Отправка системной команды через 5 секунд."
+    )
+
+    logger.warning("Подтверждена операция питания: %s", action)
+    await asyncio.sleep(5)
+
+    try:
+        result = subprocess.run(
+            commands[action],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+
+        if result.returncode != 0:
+            logger.error(
+                "Команда питания завершилась с ошибкой: action=%s, exit=%s",
+                action, result.returncode
+            )
+            message = (
+                "❌ Ошибка отправки системной команды. "
+                "Проверьте состояние сервера."
+            )
+        else:
+            logger.warning(
+                "Системная команда питания принята: %s", action
+            )
+            message = (
+                "✅ Системная команда отправлена.\n"
+                "Фактическое состояние сервера необходимо проверить."
+            )
+
+    except subprocess.TimeoutExpired:
+        logger.error("Таймаут системной команды питания: %s", action)
+        message = (
+            "⚠️ Превышено время ожидания системной команды. "
+            "Результат неизвестен."
+        )
+
+    except Exception as e:
+        logger.error(
+            "Ошибка системной команды питания: action=%s, type=%s",
+            action, type(e).__name__
+        )
+        message = (
+            "❌ Не удалось подтвердить выполнение системной команды."
+        )
+
+    try:
+        await query.edit_message_text(message)
+    except Exception as e:
+        logger.warning(
+            "Не удалось отправить результат операции питания: %s",
+            type(e).__name__
+        )
+        # Повторный запуск systemctl запрещён.
+
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /cancel"""
+    if update.effective_user.id != ALLOWED_USER_ID:
+        return
+    
+    context.user_data.pop("pending_power_action", None)
+    context.user_data.pop("pending_package_action", None)
+
+    # Сбрасываем все флаги ожидания
+    was_unban = context.user_data.get('awaiting_unban_ip', False)
+
+    context.user_data['awaiting_unban_ip'] = False
+    context.user_data['awaiting_log_path'] = False
+    context.user_data['awaiting_traceroute'] = False
+    
+    if was_unban:
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "🔙 К списку заблокированных IP",
+                callback_data="banned_ips"
+            )]
+        ])
+    else:
+        keyboard = main_menu_keyboard()
+
+    await update.message.reply_text(
+        "❌ Операция отменена",
+        reply_markup=keyboard
+    )
 
 # ============================================
 # ОБРАБОТЧИК ТЕКСТОВЫХ СООБЩЕНИЙ
@@ -1904,6 +2546,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Используется для:
     - Ввода IP-адреса для разбана
     - Ввода пути к лог-файлу
+    - Ввода адреса для traceroute
     - Обработки команды /cancel
     """
     # Проверка авторизации
@@ -1916,148 +2559,181 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == '/cancel':
         context.user_data['awaiting_unban_ip'] = False
         context.user_data['awaiting_log_path'] = False
+        context.user_data['awaiting_traceroute'] = False
         await update.message.reply_text(
             "❌ Операция отменена",
             reply_markup=main_menu_keyboard()
         )
         return
     
+    # Обработка ввода адреса для traceroute
+    if context.user_data.get('awaiting_traceroute'):
+        context.user_data['awaiting_traceroute'] = False
+        target = text
+        
+        # Базовая валидация (IP или домен)
+        if validate_traceroute_target(target):
+            await execute_traceroute(update, context, target)
+        else:
+            await update.message.reply_text(
+                "❌ Неверный формат адреса.\n\n"
+                "Используйте IP или домен без спецсимволов.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton(
+                        "🔄 Повторить", callback_data="cmd_traceroute"
+                    )],
+                    [InlineKeyboardButton(
+                        "🔙 К меню сети", callback_data="extra_network"
+                    )]
+                ])
+            )
+        return
+    
     # Обработка ввода IP для разбана
     if context.user_data.get('awaiting_unban_ip'):
-        ip = text
-        
-        # Валидация формата IP
-        ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
-        if not re.match(ip_pattern, ip):
-            await update.message.reply_text(
-                "❌ Неверный формат IP.\n\n"
-                "Введите IP в формате: `xxx.xxx.xxx.xxx`\n"
-                "Или отправьте /cancel для отмены.",
-                parse_mode='Markdown'
-            )
-            return
-        
-        # Проверка октетов
-        octets = ip.split('.')
-        if not all(0 <= int(octet) <= 255 for octet in octets):
-            await update.message.reply_text(
-                "❌ IP должен содержать числа от 0 до 255.\n"
-                "Попробуйте снова или отправьте /cancel"
-            )
-            return
-        
-        # Разбан IP во всех jail'ах
-        context.user_data['awaiting_unban_ip'] = False
-        
+        # INPUT04_MANUAL_UNBAN
+        import ipaddress
+
         try:
-            # Пробуем универсальную команду
+            ip = str(ipaddress.ip_address(text))
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Некорректный IP-адрес.\n\n"
+                "Введите IPv4 или IPv6 либо отправьте /cancel."
+            )
+            return
+
+        # Исключаем повторное выполнение при следующем сообщении.
+        context.user_data['awaiting_unban_ip'] = False
+
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "🔙 К списку заблокированных IP",
+                callback_data="banned_ips"
+            )]
+        ])
+
+        try:
             result = subprocess.run(
                 ['fail2ban-client', 'unban', ip],
                 capture_output=True,
                 text=True,
                 timeout=10
             )
-            
-            if result.returncode == 0:
-                logger.info(f"IP {ip} разбанен через handle_text")
-                await update.message.reply_text(
-                    f"✅ IP `{ip}` успешно разбанен",
-                    parse_mode='Markdown',
-                    reply_markup=main_menu_keyboard()
+
+            if result.returncode != 0:
+                logger.warning(
+                    "Ручная разблокировка Fail2ban: exit=%s",
+                    result.returncode
+                )
+                message = (
+                    "❌ Ошибка выполнения разблокировки. "
+                    "Результат необходимо проверить."
                 )
             else:
-                # Пробуем разбанить в каждом jail отдельно
-                status = subprocess.run(
-                    ['fail2ban-client', 'status'],
-                    capture_output=True,
-                    text=True,
-                    timeout=10
-                )
-                
-                jail_list = []
-                for line in status.stdout.split('\n'):
-                    if 'Jail list' in line:
-                        jail_list = [j.strip() for j in line.split(':\t')[1].strip().split(',')]
-                        break
-                
-                unbanned = False
-                for jail in jail_list:
-                    unban_result = subprocess.run(
-                        ['fail2ban-client', 'set', jail, 'unbanip', ip],
-                        capture_output=True,
-                        text=True,
-                        timeout=10
+                count_text = result.stdout.strip()
+
+                if not count_text.isascii() or not count_text.isdecimal():
+                    logger.warning(
+                        "Неожиданный ответ ручной разблокировки Fail2ban: %r",
+                        count_text[:100]
                     )
-                    if unban_result.returncode == 0:
-                        unbanned = True
-                
-                if unbanned:
-                    await update.message.reply_text(
-                        f"✅ IP `{ip}` успешно разбанен",
-                        parse_mode='Markdown',
-                        reply_markup=main_menu_keyboard()
+                    message = (
+                        "⚠️ Команда разблокировки выполнена, "
+                        "но количество снятых блокировок не подтверждено."
                     )
                 else:
-                    await update.message.reply_text(
-                        f"❌ IP `{ip}` не найден в списке забаненных",
-                        parse_mode='Markdown',
-                        reply_markup=main_menu_keyboard()
-                    )
-        
-        except Exception as e:
-            logger.error(f"Ошибка разбана IP {ip}: {e}")
-            await update.message.reply_text(
-                f"❌ Ошибка: {str(e)}",
-                reply_markup=main_menu_keyboard()
+                    removed_count = int(count_text)
+
+                    if removed_count == 0:
+                        message = (
+                            f"ℹ️ Для IP {ip} блокировок не обнаружено."
+                        )
+                    else:
+                        logger.info(
+                            "Ручная разблокировка Fail2ban: removed=%s",
+                            removed_count
+                        )
+                        message = (
+                            f"✅ IP {ip} разблокирован.\n\n"
+                            f"Снято блокировок: {removed_count}"
+                        )
+
+        except subprocess.TimeoutExpired:
+            logger.error("Таймаут ручной разблокировки Fail2ban")
+            message = (
+                "⚠️ Превышено время ожидания Fail2ban. "
+                "Результат неизвестен — проверьте список блокировок."
             )
-        
+
+        except Exception as e:
+            logger.error(
+                "Ошибка ручной разблокировки Fail2ban: %s",
+                type(e).__name__
+            )
+            message = (
+                "❌ Не удалось подтвердить выполнение разблокировки."
+            )
+
+        await update.message.reply_text(
+            message,
+            reply_markup=keyboard
+        )
         return
-    
+
     # Обработка ввода пути к логу
     if context.user_data.get('awaiting_log_path'):
         log_path = text
         context.user_data['awaiting_log_path'] = False
         
-        if os.path.exists(log_path):
-            try:
-                result = subprocess.run(
-                    ['tail', '-50', log_path],
-                    capture_output=True,
-                    text=True,
-                    timeout=10
-                )
-                
-                log_content = result.stdout
-                if len(log_content) > 3000:
-                    log_content = log_content[-3000:]
-                
-                log_content = log_content.replace('`', "'")
-                
-                message = f"📁 *{log_path}*\n\n```\n{log_content}\n```"
-                
-                keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='logs_menu')]]
-                
-                await update.message.reply_text(
-                    message,
-                    parse_mode='Markdown',
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
-            except Exception as e:
-                await update.message.reply_text(f"❌ Ошибка чтения: {str(e)}")
-        else:
+        try:
+            log_content = read_safe_log(log_path)
+
+            if len(log_content) > 3000:
+                log_content = log_content[-3000:]
+
+
+            message = f"📁 <b>{html.escape(log_path)}</b>\n\n<pre>{html.escape(log_content)}</pre>"
+
+            keyboard = [[InlineKeyboardButton(
+                "🔙 Назад", callback_data='logs_menu'
+            )]]
+
             await update.message.reply_text(
-                f"❌ Файл не найден: `{log_path}`",
-                parse_mode='Markdown',
-                reply_markup=main_menu_keyboard()
+                message,
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
-        
+
+        except (ValueError, OSError) as e:
+            logger.warning(
+                "Отказ при чтении пользовательского журнала: %s",
+                type(e).__name__
+            )
+            await update.message.reply_text(
+                "❌ Доступ к файлу запрещён или файл недоступен",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "🔙 Назад", callback_data="logs_menu"
+                    )
+                ]])
+            )
+
+        except Exception as e:
+            logger.error(
+                "Ошибка обработки пользовательского журнала: %s",
+                type(e).__name__
+            )
+            await update.message.reply_text(
+                "❌ Ошибка при чтении журнала",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "🔙 Назад", callback_data="logs_menu"
+                    )
+                ]])
+            )
+
         return
-    
-    # Если нет активного ожидания ввода — показываем меню
-    await update.message.reply_text(
-        "🤖 Используйте кнопки меню или команду /start",
-        reply_markup=main_menu_keyboard()
-    )
 
 # ============================================
 # НАВИГАЦИЯ
@@ -2070,11 +2746,1088 @@ async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     query = update.callback_query
     await query.answer()
+
+    context.user_data.pop("pending_power_action", None)
+    context.user_data.pop("pending_package_action", None)
+    context.user_data['awaiting_traceroute'] = False
     await query.edit_message_text("🤖 *Admin Bot v2*", reply_markup=main_menu_keyboard(), parse_mode='Markdown')
+
+# ============================================
+# ДОПОЛНИТЕЛЬНЫЕ КОМАНДЫ
+# ============================================
+
+def extra_menu_keyboard():
+    """Меню дополнительных команд по категориям"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🌐 Сеть", callback_data='extra_network')],
+        [InlineKeyboardButton("🛡️ Безопасность", callback_data='extra_security')],
+        [InlineKeyboardButton("🔍 Диагностика", callback_data='extra_diagnostics')],
+        [InlineKeyboardButton("🐳 Docker", callback_data='extra_docker')],
+        [InlineKeyboardButton("📦 Система", callback_data='extra_system')],
+        [InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')],
+    ])
+
+def extra_network_keyboard():
+    """Подменю: Сеть"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔌 Открытые порты", callback_data='cmd_open_ports')],
+        [InlineKeyboardButton("🌍 Активные соединения", callback_data='cmd_active_connections')],
+        [InlineKeyboardButton("🔐 SSH сессии", callback_data='cmd_ssh_sessions')],
+        [InlineKeyboardButton("🔍 Trace route", callback_data='cmd_traceroute')],
+        [InlineKeyboardButton("🔙 Назад", callback_data='extra_menu')],
+    ])
+
+def extra_security_keyboard():
+    """Подменю: Безопасность"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("👤 Последние входы", callback_data='cmd_last_logins')],
+        [InlineKeyboardButton("🔒 Sudo логи", callback_data='cmd_sudo_logs')],
+        [InlineKeyboardButton("🔙 Назад", callback_data='extra_menu')],
+    ])
+
+def extra_diagnostics_keyboard():
+    """Подменю: Диагностика"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔝 Top CPU процессы", callback_data='cmd_top_cpu')],
+        [InlineKeyboardButton("💾 Top RAM процессы", callback_data='cmd_top_ram')],
+        [InlineKeyboardButton("🔥 Zombie процессы", callback_data='cmd_zombie')],
+        [InlineKeyboardButton("🧵 Thread count", callback_data='cmd_threads')],
+        [InlineKeyboardButton("🗂️ Большие файлы", callback_data='cmd_big_files')],
+        [InlineKeyboardButton("📉 I/O wait", callback_data='cmd_io_wait')],
+        [InlineKeyboardButton("🧪 Test DNS", callback_data='cmd_test_dns')],
+        [InlineKeyboardButton("🔙 Назад", callback_data='extra_menu')],
+    ])
+
+def extra_docker_keyboard():
+    """Подменю: Docker"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Docker stats", callback_data='cmd_docker_stats')],
+        [InlineKeyboardButton("📦 Images size", callback_data='cmd_docker_images')],
+        [InlineKeyboardButton("🔙 Назад", callback_data='extra_menu')],
+    ])
+
+def extra_system_keyboard():
+    """Подменю: Система"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📅 Uptime", callback_data='cmd_uptime')],
+        [InlineKeyboardButton("🔄 Systemd failed", callback_data='cmd_systemd_failed')],
+        [InlineKeyboardButton("📦 Apt history", callback_data='cmd_apt_history')],
+        [InlineKeyboardButton("🧹 Apt cache size", callback_data='cmd_apt_cache')],
+        [InlineKeyboardButton("🔙 Назад", callback_data='extra_menu')],
+    ])
+
+# ============================================
+# ДОПОЛНИТЕЛЬНЫЕ КОМАНДЫ - НАВИГАЦИЯ
+# ============================================
+
+async def show_extra_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать меню дополнительных команд"""
+    query = update.callback_query
+    await query.answer()
+
+    context.user_data['awaiting_traceroute'] = False
+    
+    await query.edit_message_text(
+        "➕ *ДОПОЛНИТЕЛЬНЫЕ КОМАНДЫ*\n\n"
+        "Выберите категорию:",
+        parse_mode='Markdown',
+        reply_markup=extra_menu_keyboard()
+    )
+
+async def show_extra_network(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подменю: Сеть"""
+    query = update.callback_query
+    await query.answer()
+
+    context.user_data['awaiting_traceroute'] = False
+    
+    await query.edit_message_text(
+        "🌐 *СЕТЬ*\n\n"
+        "Выберите команду:",
+        parse_mode='Markdown',
+        reply_markup=extra_network_keyboard()
+    )
+
+async def show_extra_security(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подменю: Безопасность"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "🛡️ *БЕЗОПАСНОСТЬ*\n\n"
+        "Выберите команду:",
+        parse_mode='Markdown',
+        reply_markup=extra_security_keyboard()
+    )
+
+async def show_extra_diagnostics(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подменю: Диагностика"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "🔍 *ДИАГНОСТИКА*\n\n"
+        "Выберите команду:",
+        parse_mode='Markdown',
+        reply_markup=extra_diagnostics_keyboard()
+    )
+
+async def show_extra_docker(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подменю: Docker"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "🐳 *DOCKER*\n\n"
+        "Выберите команду:",
+        parse_mode='Markdown',
+        reply_markup=extra_docker_keyboard()
+    )
+
+async def show_extra_system(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подменю: Система"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "📦 *СИСТЕМА И ПАКЕТЫ*\n\n"
+        "Выберите команду:",
+        parse_mode='Markdown',
+        reply_markup=extra_system_keyboard()
+    )
+
+# ============================================
+# ДОПОЛНИТЕЛЬНЫЕ КОМАНДЫ - РЕАЛИЗАЦИЯ
+# ============================================
+
+# --- СЕТЬ ---
+
+async def cmd_open_ports(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать открытые порты (ss -tlnp)"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['ss', '-tlnp'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        output = result.stdout.strip()
+        
+        # Парсим вывод для красивого отображения
+        lines = output.split('\n')
+        if len(lines) > 1:
+            message = "🔌 *ОТКРЫТЫЕ ПОРТЫ*\n\n```\n"
+            # Ограничиваем вывод
+            for line in lines[:20]:
+                message += line[:80] + "\n"
+            if len(lines) > 20:
+                message += f"\n... и ещё {len(lines) - 20} строк\n"
+            message += "```"
+        else:
+            message = "🔌 *ОТКРЫТЫЕ ПОРТЫ*\n\nНет открытых портов"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_open_ports: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_network')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_active_connections(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать топ активных соединений по IP"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['ss', '-tn', 'state', 'established'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        lines = result.stdout.strip().split('\n')[1:]  # Пропускаем заголовок
+        
+        ip_count = {}
+        for line in lines:
+            parts = line.split()
+            if len(parts) >= 4:
+                peer = parts[3]  # Исправлено: индекс 3, не 4
+                # Обработка IPv6 [addr]:port и IPv4 addr:port
+                if peer.startswith('['):
+                    # IPv6: [2a0d:6c2:24:347::]:40052
+                    match = re.match(r'\[([^\]]+)\]:(\d+)', peer)
+                    if match:
+                        ip = match.group(1)
+                    else:
+                        ip = peer
+                else:
+                    # IPv4: 185.254.158.38:22
+                    ip = peer.rsplit(':', 1)[0]
+                
+                ip_count[ip] = ip_count.get(ip, 0) + 1
+        
+        if ip_count:
+            sorted_ips = sorted(ip_count.items(), key=lambda x: x[1], reverse=True)[:15]
+            
+            message = "🌍 *АКТИВНЫЕ СОЕДИНЕНИЯ*\n\n"
+            message += f"Всего соединений: {len(lines)}\n\n"
+            message += "*Топ IP по количеству:*\n"
+            for ip, count in sorted_ips:
+                # Сокращаем длинные IPv6
+                display_ip = ip if len(ip) <= 25 else ip[:22] + "..."
+                message += f"`{display_ip}` — {count}\n"
+        else:
+            message = "🌍 *АКТИВНЫЕ СОЕДИНЕНИЯ*\n\nНет активных соединений"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_active_connections: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_network')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_ssh_sessions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать активные SSH сессии"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        # who показывает залогиненных пользователей
+        result = subprocess.run(
+            ['who'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        lines = result.stdout.strip().split('\n')
+        
+        if lines and lines[0]:
+            message = "🔐 *SSH СЕССИИ*\n\n"
+            message += f"Активных сессий: {len(lines)}\n\n"
+            message += "```\n"
+            for line in lines:
+                message += line + "\n"
+            message += "```"
+        else:
+            message = "🔐 *SSH СЕССИИ*\n\n✅ Нет активных сессий"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_ssh_sessions: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_network')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_ssh_sessions_sec(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать активные SSH сессии (возврат в меню безопасности)"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['who'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        lines = result.stdout.strip().split('\n')
+        
+        if lines and lines[0]:
+            message = "🔐 *SSH СЕССИИ*\n\n"
+            message += f"Активных сессий: {len(lines)}\n\n"
+            message += "```\n"
+            for line in lines:
+                message += line + "\n"
+            message += "```"
+        else:
+            message = "🔐 *SSH СЕССИИ*\n\n✅ Нет активных сессий"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_ssh_sessions_sec: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_security')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_uptime(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать uptime системы"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        # Uptime
+        boot_time = datetime.fromtimestamp(psutil.boot_time())
+        uptime = datetime.now() - boot_time
+        
+        days = uptime.days
+        hours, remainder = divmod(uptime.seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        
+        # Load average
+        load_avg = psutil.getloadavg()
+        
+        # Количество пользователей
+        users = len(psutil.users())
+        
+        message = "📅 *UPTIME*\n\n"
+        message += f"🕐 *Время работы:* {days}д {hours}ч {minutes}м {seconds}с\n\n"
+        message += f"📅 *Запущен:* {boot_time.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        message += f"📈 *Load Average:* {load_avg[0]:.2f}, {load_avg[1]:.2f}, {load_avg[2]:.2f}\n\n"
+        message += f"👥 *Пользователей онлайн:* {users}"
+            
+    except Exception as e:
+        logger.error(f"Ошибка cmd_uptime: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_system')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_systemd_failed(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать упавшие systemd сервисы"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['systemctl', '--failed', '--no-pager', '--no-legend'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        output = result.stdout.strip()
+        
+        if output:
+            lines = output.split('\n')
+            message = "🔄 *УПАВШИЕ СЕРВИСЫ*\n\n"
+            message += f"❌ Найдено проблем: {len(lines)}\n\n"
+            message += "```\n"
+            for line in lines[:15]:
+                message += line[:70] + "\n"
+            if len(lines) > 15:
+                message += f"\n... и ещё {len(lines) - 15}\n"
+            message += "```"
+        else:
+            message = "🔄 *УПАВШИЕ СЕРВИСЫ*\n\n✅ Все сервисы работают нормально"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_systemd_failed: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_system')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_traceroute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Запрос адреса для traceroute"""
+    query = update.callback_query
+    await query.answer()
+    
+    context.user_data['awaiting_traceroute'] = True
+    
+    await query.edit_message_text(
+        "🔍 *TRACEROUTE*\n\n"
+        "Введите IP-адрес или домен для трассировки:\n\n"
+        "Например: `8.8.8.8` или `google.com`\n\n"
+        "Для отмены отправьте /cancel",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "🔙 К меню сети", callback_data="extra_network"
+            )]
+        ])
+    )
+
+def validate_traceroute_target(value: str) -> bool:
+    """Проверяет IPv4, IPv6 или допустимое DNS-имя."""
+    import ipaddress
+
+    if not isinstance(value, str) or not value:
+        return False
+
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        pass
+
+    # Некорректный числовой IP нельзя принимать за DNS-имя.
+    if re.fullmatch(r"[0-9.]+", value):
+        return False
+
+    if len(value) > 253 or not value.isascii():
+        return False
+
+    name = value.removesuffix(".")
+    if not name:
+        return False
+
+    label_pattern = re.compile(
+        r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    )
+
+    return all(
+        label_pattern.fullmatch(label)
+        for label in name.split(".")
+    )
+
+
+async def execute_traceroute(update: Update, context: ContextTypes.DEFAULT_TYPE, target: str):
+    """Выполнить traceroute к указанному адресу"""
+    if not validate_traceroute_target(target):
+        logger.warning("Отклонён недопустимый адрес traceroute")
+        keyboard = [[InlineKeyboardButton(
+            "🔙 К меню сети", callback_data="extra_network"
+        )]]
+        await update.message.reply_text(
+            "❌ Неверный формат IP-адреса или имени хоста",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
+    await update.message.reply_text(f"🔍 Выполняю traceroute к <code>{html.escape(target)}</code>...\nЭто может занять до 30 секунд.", parse_mode='HTML')
+
+    try:
+        result = subprocess.run(
+            ['traceroute', '-m', '10', '-w', '1', '-q', '1', target],
+            capture_output=True,
+            text=True,
+            timeout=45
+        )
+
+        output = result.stdout.strip()
+
+        if result.returncode != 0:
+            logger.warning(
+                "Traceroute failed (exit=%s)",
+                result.returncode
+            )
+            message = "❌ Ошибка выполнения traceroute"
+        elif output:
+            message = f"🔍 <b>TRACEROUTE → {html.escape(target)}</b>\n\n<pre>"
+            lines = output.split('\n')
+            for line in lines[:15]:
+                message += html.escape(line[:65]) + "\n"
+            if len(lines) > 15:
+                message += f"\n... и ещё {len(lines) - 15} хопов\n"
+            message += "</pre>"
+        else:
+            message = f"❌ Не удалось выполнить traceroute к {html.escape(target)}"
+            if result.stderr:
+                message += f"\n\n{html.escape(result.stderr)}"
+
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут (45 сек). Хост может быть недоступен или блокирует ICMP."
+    except FileNotFoundError:
+        message = "❌ traceroute не установлен. Установите: <code>apt install traceroute</code>"
+    except Exception as e:
+        logger.error(f"Ошибка traceroute: {e}")
+        message = "❌ Внутренняя ошибка выполнения traceroute"
+
+    keyboard = [
+        [InlineKeyboardButton(
+            "🔄 Повторить", callback_data="cmd_traceroute"
+        )],
+        [InlineKeyboardButton(
+            "🔙 К меню сети", callback_data="extra_network"
+        )]
+    ]
+    await update.message.reply_text(message, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+
+# --- БЕЗОПАСНОСТЬ ---
+
+async def cmd_last_logins(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать последние входы в систему"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['last', '-n', '15', '-a'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        output = result.stdout.strip()
+        
+        if output:
+            message = "👤 *ПОСЛЕДНИЕ ВХОДЫ*\n\n```\n"
+            lines = output.split('\n')
+            for line in lines[:15]:
+                if line.strip():
+                    message += line[:75] + "\n"
+            message += "```"
+        else:
+            message = "👤 *ПОСЛЕДНИЕ ВХОДЫ*\n\nНет данных"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_last_logins: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_security')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_sudo_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать последние sudo команды"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        # Пробуем разные источники логов sudo
+        log_files = ['/var/log/auth.log', '/var/log/secure']
+        log_file = None
+        
+        for f in log_files:
+            if os.path.exists(f):
+                log_file = f
+                break
+        
+        if log_file:
+            result = subprocess.run(
+                ['grep', '-a', 'sudo', log_file],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            lines = result.stdout.strip().split('\n')
+            # Берём последние 15 строк
+            recent = [l for l in lines if l.strip()][-15:]
+            
+            if recent:
+                message = "🔒 *SUDO ЛОГИ*\n\n```\n"
+                for line in recent:
+                    # Сокращаем длинные строки
+                    message += line[:70] + "\n"
+                message += "```"
+            else:
+                message = "🔒 *SUDO ЛОГИ*\n\n✅ Нет записей sudo"
+        else:
+            message = "🔒 *SUDO ЛОГИ*\n\n❌ Лог-файл не найден"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_sudo_logs: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_security')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+# --- ДИАГНОСТИКА ---
+
+async def cmd_top_cpu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать топ процессов по CPU"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['ps', 'aux', '--sort=-%cpu'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        lines = result.stdout.strip().split('\n')
+        
+        message = "🔝 *TOP CPU ПРОЦЕССЫ*\n\n```\n"
+        # Заголовок
+        message += "CPU%  MEM%  COMMAND\n"
+        message += "-" * 30 + "\n"
+        
+        # Топ 10 процессов (пропускаем заголовок)
+        for line in lines[1:11]:
+            parts = line.split()
+            if len(parts) >= 11:
+                cpu = parts[2]
+                mem = parts[3]
+                cmd = parts[10][:20]
+                message += f"{cpu:>5} {mem:>5}  {cmd}\n"
+        
+        message += "```"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_top_cpu: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_diagnostics')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_top_ram(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать топ процессов по RAM"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['ps', 'aux', '--sort=-%mem'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        lines = result.stdout.strip().split('\n')
+        
+        message = "💾 *TOP RAM ПРОЦЕССЫ*\n\n```\n"
+        message += "MEM%  CPU%  COMMAND\n"
+        message += "-" * 30 + "\n"
+        
+        for line in lines[1:11]:
+            parts = line.split()
+            if len(parts) >= 11:
+                cpu = parts[2]
+                mem = parts[3]
+                cmd = parts[10][:20]
+                message += f"{mem:>5} {cpu:>5}  {cmd}\n"
+        
+        message += "```"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_top_ram: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_diagnostics')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_big_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать большие файлы на диске"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        # Ищем файлы больше 100MB
+        result = subprocess.run(
+            ['find', '/', '-type', 'f', '-size', '+100M', '-exec', 'ls', '-lh', '{}', ';'],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        lines = result.stdout.strip().split('\n')
+        # Фильтруем пустые строки
+        files = [l for l in lines if l.strip()]
+        
+        if files:
+            message = "🗂️ *БОЛЬШИЕ ФАЙЛЫ (>100MB)*\n\n```\n"
+            for line in files[:15]:
+                parts = line.split()
+                if len(parts) >= 9:
+                    size = parts[4]
+                    path = ' '.join(parts[8:])
+                    # Сокращаем путь
+                    if len(path) > 40:
+                        path = "..." + path[-37:]
+                    message += f"{size:>6}  {path}\n"
+            
+            if len(files) > 15:
+                message += f"\n... и ещё {len(files) - 15} файлов\n"
+            message += "```"
+        else:
+            message = "🗂️ *БОЛЬШИЕ ФАЙЛЫ*\n\n✅ Нет файлов больше 100MB"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут (поиск занял более 30 сек)"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_big_files: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_diagnostics')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_io_wait(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать I/O wait статистику"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['iostat', '-x', '1', '2'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        output = result.stdout.strip()
+        
+        if output:
+            # Берём последний блок вывода
+            blocks = output.split('\n\n')
+            last_block = blocks[-1] if blocks else output
+            
+            message = "📉 *I/O СТАТИСТИКА*\n\n```\n"
+            lines = last_block.split('\n')
+            for line in lines[:12]:
+                message += line[:65] + "\n"
+            message += "```"
+        else:
+            message = "📉 *I/O СТАТИСТИКА*\n\n❌ Нет данных"
+            
+    except FileNotFoundError:
+        message = "📉 *I/O СТАТИСТИКА*\n\n❌ iostat не установлен\n\nУстановите: `apt install sysstat`"
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_io_wait: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_diagnostics')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_test_dns(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Тестирование DNS"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        dns_servers = ['8.8.8.8', '1.1.1.1', '77.88.8.8']
+        test_domain = 'google.com'
+        
+        message = "🧪 *ТЕСТ DNS*\n\n"
+        
+        for dns in dns_servers:
+            try:
+                result = subprocess.run(
+                    ['dig', f'@{dns}', test_domain, '+short', '+time=2', '+tries=1'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                
+                if result.returncode == 0 and result.stdout.strip():
+                    ip = result.stdout.strip().split('\n')[0]
+                    message += f"✅ `{dns}` → {ip}\n"
+                else:
+                    message += f"❌ `{dns}` — нет ответа\n"
+                    
+            except subprocess.TimeoutExpired:
+                message += f"⏱️ `{dns}` — таймаут\n"
+            except Exception as e:
+                message += f"❌ `{dns}` — ошибка\n"
+        
+        # Проверяем системный DNS
+        message += "\n*Системный DNS:*\n"
+        try:
+            result = subprocess.run(
+                ['dig', test_domain, '+short', '+time=2'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.stdout.strip():
+                message += f"✅ Работает → {result.stdout.strip().split()[0]}"
+            else:
+                message += "❌ Не отвечает"
+        except:
+            message += "❌ Ошибка проверки"
+            
+    except FileNotFoundError:
+        message = "🧪 *ТЕСТ DNS*\n\n❌ dig не установлен\n\nУстановите: `apt install dnsutils`"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_test_dns: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_diagnostics')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+# --- DOCKER ---
+
+async def cmd_docker_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать статистику Docker контейнеров"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['docker', 'stats', '--no-stream', '--format', 
+             'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}'],
+            capture_output=True,
+            text=True,
+            timeout=15
+        )
+        
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            if output:
+                message = "📊 *DOCKER STATS*\n\n```\n"
+                lines = output.split('\n')
+                for line in lines[:15]:
+                    message += line[:65] + "\n"
+                if len(lines) > 15:
+                    message += f"\n... и ещё {len(lines) - 15}\n"
+                message += "```"
+            else:
+                message = "📊 *DOCKER STATS*\n\n✅ Нет запущенных контейнеров"
+        else:
+            message = f"📊 *DOCKER STATS*\n\n❌ Ошибка: {result.stderr}"
+            
+    except FileNotFoundError:
+        message = "📊 *DOCKER STATS*\n\n❌ Docker не установлен"
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_docker_stats: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_docker')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_docker_images(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать размер Docker образов"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['docker', 'images', '--format', 'table {{.Repository}}\t{{.Tag}}\t{{.Size}}'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            if output:
+                message = "📦 *DOCKER IMAGES*\n\n```\n"
+                lines = output.split('\n')
+                for line in lines[:15]:
+                    message += line[:65] + "\n"
+                if len(lines) > 15:
+                    message += f"\n... и ещё {len(lines) - 15}\n"
+                message += "```\n"
+                
+                # Общий размер
+                du_result = subprocess.run(
+                    ['docker', 'system', 'df', '--format', '{{.Type}}\t{{.Size}}'],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if du_result.returncode == 0:
+                    message += "\n*Использование диска:*\n```\n"
+                    message += du_result.stdout.strip()
+                    message += "\n```"
+            else:
+                message = "📦 *DOCKER IMAGES*\n\n✅ Нет образов"
+        else:
+            message = f"📦 *DOCKER IMAGES*\n\n❌ Ошибка: {result.stderr}"
+            
+    except FileNotFoundError:
+        message = "📦 *DOCKER IMAGES*\n\n❌ Docker не установлен"
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_docker_images: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_docker')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+# --- ПРОЦЕССЫ ---
+
+async def cmd_zombie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать zombie процессы"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['ps', 'aux'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        lines = result.stdout.strip().split('\n')
+        zombies = [l for l in lines if ' Z ' in l or ' Z+ ' in l]
+        
+        if zombies:
+            message = "🔥 *ZOMBIE ПРОЦЕССЫ*\n\n"
+            message += f"Найдено: {len(zombies)}\n\n```\n"
+            for line in zombies[:10]:
+                parts = line.split()
+                if len(parts) >= 11:
+                    pid = parts[1]
+                    cmd = ' '.join(parts[10:])[:30]
+                    message += f"PID {pid}: {cmd}\n"
+            message += "```"
+        else:
+            message = "🔥 *ZOMBIE ПРОЦЕССЫ*\n\n✅ Нет zombie процессов"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_zombie: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_diagnostics')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_threads(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать количество потоков по процессам"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['ps', '-eo', 'nlwp,pid,comm', '--sort=-nlwp'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        lines = result.stdout.strip().split('\n')
+        
+        message = "🧵 *ПОТОКИ ПО ПРОЦЕССАМ*\n\n```\n"
+        message += "THREADS  PID    COMMAND\n"
+        message += "-" * 30 + "\n"
+        
+        for line in lines[1:12]:  # Топ 11, пропуская заголовок
+            parts = line.split()
+            if len(parts) >= 3:
+                threads = parts[0]
+                pid = parts[1]
+                cmd = parts[2][:15]
+                message += f"{threads:>7}  {pid:<6} {cmd}\n"
+        
+        message += "```"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_threads: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_diagnostics')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+# --- СИСТЕМА ---
+
+async def cmd_apt_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать историю apt"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        log_file = '/var/log/apt/history.log'
+        log_file_gz = '/var/log/apt/history.log.1.gz'
+        output = ""
+
+        # Сначала пробуем текущий лог
+        if os.path.exists(log_file) and os.path.getsize(log_file) > 0:
+            result = subprocess.run(
+                ['tail', '-50', log_file],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            output = result.stdout.strip()
+
+        # Если пусто — читаем архив
+        if not output and os.path.exists(log_file_gz):
+            result = subprocess.run(
+                ['zcat', log_file_gz],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            lines = result.stdout.strip().split('\n')
+            output = '\n'.join(lines[-50:])
+
+        if output:
+            message = "📦 *APT ИСТОРИЯ*\n\n```\n"
+            lines = output.split('\n')
+            for line in lines[-20:]:
+                message += line[:65] + "\n"
+            message += "```"
+        else:
+            message = "📦 *APT ИСТОРИЯ*\n\n✅ Лог пуст"
+
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_apt_history: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_system')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cmd_apt_cache(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать размер apt кэша"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        result = subprocess.run(
+            ['du', '-sh', '/var/cache/apt/archives'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        cache_size = result.stdout.strip().split()[0] if result.stdout else "N/A"
+        
+        # Количество пакетов в кэше
+        count_result = subprocess.run(
+            ['ls', '-1', '/var/cache/apt/archives/'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        pkg_count = len([l for l in count_result.stdout.split('\n') if l.endswith('.deb')])
+        
+        message = "🧹 *APT КЭША*\n\n"
+        message += f"📦 Размер кэша: *{cache_size}*\n"
+        message += f"📄 Пакетов в кэше: *{pkg_count}*\n\n"
+        message += "_Для очистки выполните:_\n"
+        message += "`apt clean`"
+            
+    except subprocess.TimeoutExpired:
+        message = "❌ Таймаут выполнения команды"
+    except Exception as e:
+        logger.error(f"Ошибка cmd_apt_cache: {e}")
+        message = f"❌ Ошибка: {str(e)}"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='extra_system')]]
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
 
 # ============================================
 # ЗАПУСК БОТА
 # ============================================
+
+
+async def authorize_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Блокирует обновления от неавторизованных пользователей."""
+    user = update.effective_user
+
+    if user is None or user.id != ALLOWED_USER_ID:
+        raise ApplicationHandlerStop()
+
 
 async def main():
     """
@@ -2086,8 +3839,15 @@ async def main():
     
     app = Application.builder().token(TOKEN).build()
     
+    # Централизованная авторизация до остальных обработчиков
+    app.add_handler(
+        TypeHandler(Update, authorize_update, block=True),
+        group=-1
+    )
+
     # ===== КОМАНДЫ =====
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("cancel", cancel_command))
     
     # ===== CALLBACK HANDLERS =====
     # Порядок важен: сначала более специфичные паттерны, потом общие
@@ -2119,6 +3879,7 @@ async def main():
     app.add_handler(CallbackQueryHandler(update_system, pattern='^update_system$'))
     app.add_handler(CallbackQueryHandler(update_action, pattern='^update_(refresh|check|upgrade)$'))
     app.add_handler(CallbackQueryHandler(confirm_upgrade, pattern='^confirm_upgrade$'))
+    app.add_handler(CallbackQueryHandler(request_fix_broken, pattern='^request_fix_broken$'))
     app.add_handler(CallbackQueryHandler(fix_broken_packages, pattern='^fix_broken$'))
     
     # Логи
@@ -2135,10 +3896,50 @@ async def main():
     # Перезагрузка / Выключение
     app.add_handler(CallbackQueryHandler(confirm_reboot, pattern='^reboot$'))
     app.add_handler(CallbackQueryHandler(confirm_shutdown, pattern='^shutdown$'))
-    app.add_handler(CallbackQueryHandler(execute_power_action, pattern='^execute_'))
+    app.add_handler(CallbackQueryHandler(execute_power_action, pattern='^execute_(reboot|shutdown|power_cancel)$'))
     
     # Навигация
     app.add_handler(CallbackQueryHandler(back_to_main, pattern='^back_to_main$'))
+    
+    # Дополнительные команды - навигация по меню
+    app.add_handler(CallbackQueryHandler(show_extra_menu, pattern='^extra_menu$'))
+    app.add_handler(CallbackQueryHandler(show_extra_network, pattern='^extra_network$'))
+    app.add_handler(CallbackQueryHandler(show_extra_security, pattern='^extra_security$'))
+    app.add_handler(CallbackQueryHandler(show_extra_diagnostics, pattern='^extra_diagnostics$'))
+    app.add_handler(CallbackQueryHandler(show_extra_docker, pattern='^extra_docker$'))
+    app.add_handler(CallbackQueryHandler(show_extra_system, pattern='^extra_system$'))
+
+    # Дополнительные команды - реализация
+    app.add_handler(CallbackQueryHandler(cmd_open_ports, pattern='^cmd_open_ports$'))
+    app.add_handler(CallbackQueryHandler(cmd_active_connections, pattern='^cmd_active_connections$'))
+    app.add_handler(CallbackQueryHandler(cmd_ssh_sessions, pattern='^cmd_ssh_sessions$'))
+    app.add_handler(CallbackQueryHandler(cmd_uptime, pattern='^cmd_uptime$'))
+    app.add_handler(CallbackQueryHandler(cmd_systemd_failed, pattern='^cmd_systemd_failed$'))
+    app.add_handler(CallbackQueryHandler(cmd_traceroute, pattern='^cmd_traceroute$'))
+
+    # Дополнительные команды - безопасность
+    app.add_handler(CallbackQueryHandler(cmd_last_logins, pattern='^cmd_last_logins$'))
+    app.add_handler(CallbackQueryHandler(cmd_sudo_logs, pattern='^cmd_sudo_logs$'))
+    app.add_handler(CallbackQueryHandler(cmd_ssh_sessions_sec, pattern='^cmd_ssh_sessions_sec$'))
+
+    # Дополнительные команды - диагностика
+    app.add_handler(CallbackQueryHandler(cmd_top_cpu, pattern='^cmd_top_cpu$'))
+    app.add_handler(CallbackQueryHandler(cmd_top_ram, pattern='^cmd_top_ram$'))
+    app.add_handler(CallbackQueryHandler(cmd_big_files, pattern='^cmd_big_files$'))
+    app.add_handler(CallbackQueryHandler(cmd_io_wait, pattern='^cmd_io_wait$'))
+    app.add_handler(CallbackQueryHandler(cmd_test_dns, pattern='^cmd_test_dns$'))
+
+    # Дополнительные команды - Docker
+    app.add_handler(CallbackQueryHandler(cmd_docker_stats, pattern='^cmd_docker_stats$'))
+    app.add_handler(CallbackQueryHandler(cmd_docker_images, pattern='^cmd_docker_images$'))
+    
+    # Дополнительные команды - Процессы
+    app.add_handler(CallbackQueryHandler(cmd_zombie, pattern='^cmd_zombie$'))
+    app.add_handler(CallbackQueryHandler(cmd_threads, pattern='^cmd_threads$'))
+
+    # Дополнительные команды - Система
+    app.add_handler(CallbackQueryHandler(cmd_apt_history, pattern='^cmd_apt_history$'))
+    app.add_handler(CallbackQueryHandler(cmd_apt_cache, pattern='^cmd_apt_cache$'))
     
     # ===== ОБРАБОТЧИК ТЕКСТА =====
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))

@@ -1,5 +1,9 @@
 #!/bin/bash
-# /usr/local/bin/speed-test.sh - Измерение скорости сети
+# /opt/server-monitor/scripts/network/speed-test.sh
+# Измерение скорости сети
+
+# Фиксируем локаль для корректной работы с числами
+export LC_NUMERIC=C
 
 # Определяем основной интерфейс (берем тот, который имеет маршрут по умолчанию)
 DEFAULT_IF=$(ip route | grep default | awk '{print $5}' | head -1)

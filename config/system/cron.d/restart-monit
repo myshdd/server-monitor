@@ -1,0 +1,2 @@
+# Перезапуск monit для очистки zombie процессов (раз в сутки в 4:00)
+0 4 * * * root systemctl restart monit

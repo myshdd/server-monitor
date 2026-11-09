@@ -41,3 +41,4 @@ Thumbs.db
 
 # Локальные настройки (можно создать для разработки)
 config/local/
+data/geoip/ip-comparison-report.txt

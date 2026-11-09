@@ -1,5 +1,5 @@
 #!/bin/bash
-# /usr/local/bin/validate-config.sh
+# /opt/server-monitor/scripts/system/validate-config.sh
 # Полная валидация конфигурации с проверкой всех зависимостей
 
 source /usr/local/lib/server-monitor/load-config.sh
@@ -272,7 +272,7 @@ echo -e "${BLUE}[9/10]${NC} Проверка systemd сервисов..."
 
 SERVICES=(
     "telegram-admin-bot:Admin Telegram bot"
-    "telegram-monitor-bot:Monitor Telegram bot"
+    "telegram-monitor:Monitor Telegram bot"
 )
 
 for service_entry in "${SERVICES[@]}"; do

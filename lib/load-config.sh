@@ -1,9 +1,9 @@
 #!/bin/bash
-# /usr/local/lib/server-monitor/load-config.sh
+# /opt/server-monitor/lib/load-config.sh
 # Библиотека для загрузки конфигурации в bash-скриптах
 
 # Пути к конфигурационным файлам
-CONFIG_DIR="/root/.config/server-monitor"
+CONFIG_DIR="/opt/server-monitor/config"
 SETTINGS_FILE="$CONFIG_DIR/settings.json"
 SECRETS_FILE="$CONFIG_DIR/secrets.json"
 PATHS_FILE="$CONFIG_DIR/paths.json"
@@ -34,7 +34,7 @@ check_config_files() {
     fi
     
     if [ $missing -eq 1 ]; then
-        echo "💡 Запустите: /usr/local/bin/init-server-monitor-config.sh" >&2
+        echo "💡 Запустите: init-server-monitor-config.sh" >&2
         return 1
     fi
     
@@ -132,9 +132,9 @@ load_common_vars() {
     export F2B_SUBNET_LOG=$(get_path "logs.f2b_subnet" "/var/log/f2b-subnet-aggregator.log")
     
     # Пути к данным
-    export GEOIP_DIR=$(get_path "data.geoip_dir" "/root/geoip")
-    export GEOIP_RU_ZONE=$(get_path "data.geoip_ru_zone" "/root/geoip/ru.zone")
-    export NETWORK_STATS_DIR=$(get_path "data.network_stats_dir" "/var/lib/network-stats")
+    export GEOIP_DIR=$(get_path "data.geoip_dir" "/opt/server-monitor/data/geoip")
+    export GEOIP_RU_ZONE=$(get_path "data.geoip_ru_zone" "/opt/server-monitor/data/geoip/ru.zone")
+    export NETWORK_STATS_DIR=$(get_path "data.network_stats_dir" "/opt/server-monitor/data")
 }
 
 # ============================================

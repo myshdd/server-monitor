@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# /usr/local/lib/server-monitor/config.py
+# /opt/server-monitor/lib/config.py
 # Библиотека для загрузки конфигурации в Python-скриптах
 
 import json
@@ -50,7 +50,7 @@ class Config:
             self._paths = self._load_json(PATHS_FILE)
         except ConfigError as e:
             print(f"❌ {e}", file=sys.stderr)
-            print(f"💡 Запустите: /usr/local/bin/init-server-monitor-config.sh", file=sys.stderr)
+            print(f"💡 Запустите: init-server-monitor-config.sh", file=sys.stderr)
             raise
     
     def get_setting(self, key: str, default: Any = None) -> Any:
@@ -174,7 +174,7 @@ class Config:
     @property
     def network_stats_file(self) -> str:
         """Файл сетевой статистики"""
-        return self.get_path("data.network_stats_file", "/var/lib/network-stats/stats.json")
+        return self.get_path("data.network_stats_file", "/opt/server-monitor/data/stats.json")
 
 
 # Глобальный экземпляр конфигурации

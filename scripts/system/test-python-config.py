@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# /usr/local/bin/test-python-config.py
+# /opt/server-monitor/scripts/system/test-python-config.py
 # Тестирование Python библиотеки конфигурации
 
 import sys

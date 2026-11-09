@@ -1,4 +1,5 @@
 #!/bin/bash
+# /opt/server-monitor/scripts/network/show-iptables.sh
 echo "══════════════════════════════════════════════"
 echo "📋 ПРАВИЛА IPTABLES (без GEOIP)"
 echo "══════════════════════════════════════════════"

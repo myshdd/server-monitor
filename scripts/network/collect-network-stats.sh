@@ -1,7 +1,7 @@
 #!/bin/bash
-# /usr/local/bin/collect-network-stats.sh
+# /opt/server-monitor/scripts/network/collect-network-stats.sh
 # Сбор сетевой статистики с правильным расчётом дельт
-# Использует конфигурацию из /root/.config/server-monitor/
+# Использует централизованную конфигурацию
 
 set -euo pipefail
 
@@ -9,9 +9,9 @@ set -euo pipefail
 source /usr/local/lib/server-monitor/load-config.sh
 
 # Загружаем пути из конфигурации
-STATS_DIR=$(get_path "data.network_stats_dir" "/var/lib/network-stats")
-STATS_FILE=$(get_path "data.network_stats_file" "/var/lib/network-stats/stats.json")
-PREV_COUNTERS_FILE=$(get_path "data.prev_counters" "/var/lib/network-stats/prev_counters.json")
+STATS_DIR=$(get_path "data.network_stats_dir" "/opt/server-monitor/data")
+STATS_FILE=$(get_path "data.network_stats_file" "/opt/server-monitor/data/stats.json")
+PREV_COUNTERS_FILE=$(get_path "data.prev_counters" "/opt/server-monitor/data/prev_counters.json")
 
 TEMP_FILE="$STATS_DIR/temp_$$.json"
 LOCK_FILE="$STATS_DIR/stats.lock"

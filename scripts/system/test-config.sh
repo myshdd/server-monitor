@@ -1,5 +1,5 @@
 #!/bin/bash
-# /usr/local/bin/test-config.sh
+# /opt/server-monitor/scripts/system/test-config.sh
 # Тестирование загрузки конфигурации
 
 # Подключаем библиотеку

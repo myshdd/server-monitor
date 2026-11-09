@@ -34,42 +34,104 @@ echo ""
 log_info "Обновление списка пакетов..."
 apt-get update -qq
 
-# Список необходимых пакетов
+# Основные пакеты для работы Server Monitor
 PACKAGES=(
+    # Сеть и безопасность
     "fail2ban"
     "iperf3"
-    "jq"
+    "iptables"
+    "iptables-persistent"
+    "netfilter-persistent"
+    "ipset"
+    "net-tools"
+    "tcpdump"
+    "whois"
+    "socat"
+    "traceroute"
+    "dnsutils"
+    "ldnsutils"           # drill (DNS lookup утилита)
+    "speedtest-cli"       # Speedtest Ookla
+    # Утилиты
     "curl"
     "wget"
+    "jq"
+    "git"
+    "mc"
+    "tree"
+    "unzip"
     "htop"
+    "bc"
+    # GeoIP
+    "geoip-bin"
+    "geoip-database"
+    # Мониторинг
     "monit"
-    "python3"
+    "sysstat"
+    # Тестирование и диагностика
+    "stress-ng"
+    "cron"
+    # Python
+    "python3-full"
     "python3-venv"
     "python3-pip"
+    # Дополнительно
+    "sqlite3"
+)
+
+# Опциональные пакеты (раскомментируйте при необходимости)
+OPTIONAL_PACKAGES=(
+#     "docker.io"          # Docker контейнеризация
+      "docker-compose"     # Docker Compose
+#     "certbot"            # Let's Encrypt SSL сертификаты
+#     "nginx"              # Nginx веб-сервер
+#     "ufw"                # Uncomplicated Firewall
+#     "nmap"               # Сканер портов и сети
 )
 
 # Установка пакетов
 log_info "Установка пакетов..."
 for pkg in "${PACKAGES[@]}"; do
-    if dpkg -l | grep -q "^ii.*$pkg"; then
+    if dpkg -l | grep -q "^ii.*$pkg "; then
         log_success "$pkg уже установлен"
     else
         log_info "Установка $pkg..."
-        apt-get install -y -qq "$pkg"
-        log_success "$pkg установлен"
+        apt-get install -y -qq "$pkg" 2>/dev/null || {
+            log_warning "$pkg не удалось установить (возможно недоступен в репозиториях)"
+        }
     fi
 done
+
+# Установка опциональных пакетов (если раскомментированы)
+if [ -n "${OPTIONAL_PACKAGES}" ]; then
+ log_info "Установка опциональных пакетов..."
+ for pkg in "${OPTIONAL_PACKAGES[@]}"; do
+     if dpkg -l | grep -q "^ii.*$pkg "; then
+         log_success "$pkg уже установлен"
+     else
+         log_info "Установка $pkg..."
+         apt-get install -y -qq "$pkg"
+         log_success "$pkg установлен"
+     fi
+ done
+fi
 
 echo ""
 log_success "Все пакеты установлены"
 echo ""
 
-# Проверка версий
+# Проверка версий ключевых пакетов
 echo "Установленные версии:"
 echo "  Python: $(python3 --version 2>&1 | cut -d' ' -f2)"
 echo "  fail2ban: $(fail2ban-client --version 2>&1 | head -1)"
-echo "  iperf3: $(iperf3 --version 2>&1 | head -1 | awk '{print $1, $3}')"
-echo "  monit: $(monit --version 2>&1 | head -1)"
+echo "  iperf3: $(iperf3 --version 2>&1 | head -1 | awk '{print $2}')"
+echo "  monit: $(monit --version 2>&1 | head -1 | awk '{print $2}')"
+echo "  ipset: $(ipset --version 2>&1 | head -1)"
+if command -v speedtest &>/dev/null; then
+    echo "  speedtest: $(speedtest --version 2>&1 | head -1)"
+fi
+if command -v docker &>/dev/null; then
+    echo "  docker: $(docker --version 2>&1 | cut -d' ' -f3 | tr -d ',')"
+fi
 echo ""
 
 log_success "Установка завершена"

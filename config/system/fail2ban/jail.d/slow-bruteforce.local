@@ -1,4 +1,5 @@
 # /etc/fail2ban/jail.d/slow-bruteforce.local
+# Оптимизировано для использования ipset (O(1) lookup вместо O(n) правил iptables)
 
 # ============================================
 # Медленный brute-force: большое окно наблюдения
@@ -13,8 +14,10 @@ journalmatch = _SYSTEMD_UNIT=ssh.service + _COMM=sshd
 maxretry = 5
 findtime = 86400
 bantime = 259200
-banaction = iptables-allports
-action = iptables-allports[name=SSH-slow]
+
+# Используем ipset для эффективной блокировки большого числа IP
+banaction = iptables-ipset[name=SSH-slow, type=allports, protocol="tcp"]
+action = %(banaction)s
          telegram
 
 # ============================================
@@ -30,8 +33,10 @@ journalmatch = _SYSTEMD_UNIT=ssh.service + _COMM=sshd
 maxretry = 10
 findtime = 604800
 bantime = 2592000
-banaction = iptables-allports
-action = iptables-allports[name=SSH-very-slow]
+
+# Используем ipset для эффективной блокировки большого числа IP
+banaction = iptables-ipset[name=SSH-very-slow, type=allports, protocol="tcp"]
+action = %(banaction)s
          telegram
 
 # ============================================
@@ -47,6 +52,8 @@ journalmatch = _SYSTEMD_UNIT=ssh.service + _COMM=sshd
 maxretry = 15
 findtime = 2592000
 bantime = -1
-banaction = iptables-allports
-action = iptables-allports[name=SSH-ultra-slow]
+
+# Используем ipset для эффективной блокировки большого числа IP
+banaction = iptables-ipset[name=SSH-ultra-slow, type=allports, protocol="tcp"]
+action = %(banaction)s
          telegram

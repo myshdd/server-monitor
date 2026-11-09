@@ -15,7 +15,7 @@ NC='\033[0m' # No Color
 
 # Пути
 INSTALL_DIR="/opt/server-monitor"
-CONFIG_DIR="$HOME/.config/server-monitor"
+CONFIG_DIR="$INSTALL_DIR/config"
 LIB_DIR="/usr/local/lib/server-monitor"
 BIN_DIR="/usr/local/bin"
 DATA_DIR="/opt/server-monitor/data"
@@ -58,13 +58,17 @@ create_directories() {
 #-------------------------------------------------------------------------------
 install_lib() {
     log_info "Установка библиотеки конфигурации..."
-    
-    cp "$INSTALL_DIR/lib/config.py" "$LIB_DIR/"
-    cp "$INSTALL_DIR/lib/load-config.sh" "$LIB_DIR/"
-    chmod 644 "$LIB_DIR/config.py"
-    chmod 644 "$LIB_DIR/load-config.sh"
-    
-    log_success "Библиотека установлена в $LIB_DIR"
+
+    # Удаляем старые файлы если есть
+    rm -f "$LIB_DIR/config.py"
+    rm -f "$LIB_DIR/load-config.sh"
+    rm -rf "$LIB_DIR/__pycache__"
+
+    # Создаём симлинки
+    ln -s "$INSTALL_DIR/lib/config.py" "$LIB_DIR/config.py"
+    ln -s "$INSTALL_DIR/lib/load-config.sh" "$LIB_DIR/load-config.sh"
+
+    log_success "Библиотека установлена в $LIB_DIR (симлинки)"
 }
 
 #-------------------------------------------------------------------------------
@@ -76,8 +80,12 @@ create_symlinks() {
     local scripts_dir="$INSTALL_DIR/scripts"
     local count=0
     
+
+    # Устанавливаем права на выполнение
+    chmod +x "$scripts_dir"/*/*.sh "$scripts_dir"/*/*.py 2>/dev/null || true
     # Проходим по всем поддиректориям scripts
     for category in fail2ban network system geoip; do
+
         if [[ -d "$scripts_dir/$category" ]]; then
             for script in "$scripts_dir/$category"/*.sh "$scripts_dir/$category"/*.py; do
                 if [[ -f "$script" ]]; then
@@ -90,7 +98,7 @@ create_symlinks() {
                     fi
                     
                     ln -s "$script" "$link_path"
-                    ((count++))
+                    count=$((count + 1))
                 fi
             done
         fi
@@ -162,6 +170,11 @@ setup_venv() {
         "$bots_dir/monitor_venv/bin/pip" install -r "$bots_dir/monitor_requirements.txt" -q
     fi
     
+
+    # Установка прав на скрипты ботов
+    chmod 644 "$bots_dir/admin_bot.py"
+    chmod 644 "$bots_dir/monitor.py"
+    log_info "Права на файлы ботов установлены"
     log_success "Виртуальные окружения готовы"
 }
 
@@ -231,7 +244,11 @@ setup_cron() {
 @reboot $BIN_DIR/collect-network-stats.sh force-save > /dev/null 2>&1
 
 # Сохранение дневной статистики в 23:59
+
 59 23 * * * $BIN_DIR/collect-network-stats.sh force-save > /dev/null 2>&1
+
+# Автоматическая очистка диска каждое воскресенье в 3:30
+30 3 * * 0 /opt/server-monitor/scripts/maintenance/cleanup-disk.sh >> /var/log/cleanup-disk.log 2>&1
 CRONEOF
 
     # Показываем что будет установлено
@@ -278,13 +295,20 @@ main() {
     setup_cron
     
     echo ""
+
+    # Запуск сервисов
+    log_info "Запуск сервисов..."
+    systemctl daemon-reload
+    systemctl enable --now telegram-admin-bot 2>/dev/null || true
+    systemctl enable --now telegram-monitor 2>/dev/null || true
+    log_success "Сервисы запущены"
     echo "=========================================="
     echo "  Установка завершена!"
     echo "=========================================="
     echo ""
-    echo "Для запуска сервисов выполните:"
-    echo "  systemctl enable --now telegram-admin-bot"
-    echo "  systemctl enable --now telegram-monitor"
+    echo "Сервисы запущены. Для перезапуска:"
+    echo "  systemctl restart telegram-admin-bot"
+    echo "  systemctl restart telegram-monitor"
     echo ""
     echo "Для проверки статуса:"
     echo "  systemctl status telegram-admin-bot"

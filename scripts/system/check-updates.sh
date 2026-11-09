@@ -1,5 +1,5 @@
 #!/bin/bash
-# /usr/local/bin/check-updates.sh - Проверка обновлений системы
+# /opt/server-monitor/scripts/system/check-updates.sh - Проверка обновлений системы
 
 echo "📦 *ПРОВЕРКА ОБНОВЛЕНИЙ*"
 echo ""
